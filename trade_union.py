@@ -74,11 +74,16 @@ class TradeUnion:
     
     def remove_member(self, member_id: str) -> bool:
         """Remove a member by ID"""
-        for i, member in enumerate(self.members):
+        member_to_remove = None
+        for member in self.members:
             if member.member_id == member_id:
-                self.members.pop(i)
-                self.save_members()
-                return True
+                member_to_remove = member
+                break
+        
+        if member_to_remove:
+            self.members.remove(member_to_remove)
+            self.save_members()
+            return True
         return False
     
     def get_member(self, member_id: str) -> Optional[TradeUnionMember]:
