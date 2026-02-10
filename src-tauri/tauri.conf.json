@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Trade Union Group Manager",
+  "version": "0.1.0",
+  "identifier": "com.aswhite.tradeunion",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Trade Union Group Manager",
+        "width": 1200,
+        "height": 780,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all",
+    "resources": [
+      "../emails.txt",
+      "../removeemail.txt",
+      "../final.txt",
+      "scripts/manage_distribution_group.ps1",
+      "scripts/detect_group_type.ps1"
+    ]
+  }
+}

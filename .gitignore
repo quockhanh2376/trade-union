@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Rust build
+target/
+src-tauri/target/
+
+# Logs
+*.log
+
+# Sensitive data files
+emails.txt
+removeemail.txt
+final.txt
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
