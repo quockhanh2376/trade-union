@@ -10,7 +10,9 @@ param(
     [string]$InputFile,
 
     [Parameter(Mandatory = $true)]
-    [string]$OutputFile
+    [string]$OutputFile,
+
+    [switch]$ForceReconnect
 )
 
 $ErrorActionPreference = "Stop"
@@ -56,6 +58,16 @@ function Read-EmailList {
 try {
     Ensure-ExchangeModule
     Import-Module ExchangeOnlineManagement -ErrorAction Stop
+
+    # If ForceReconnect, disconnect any existing session first
+    if ($ForceReconnect) {
+        try {
+            Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+        }
+        catch {}
+        Write-Host "Force reconnect: will prompt for fresh credentials." -ForegroundColor Yellow
+    }
+
     Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
 
     $emails = Read-EmailList -Path $InputFile
@@ -63,35 +75,47 @@ try {
         Write-Host "No valid emails found in $InputFile"
     }
 
-    $success = 0
-    $failed = 0
+    # Thread-safe counters using synchronized hashtable
+    $results = [hashtable]::Synchronized(@{
+            Success = 0
+            Failed  = 0
+        })
 
-    foreach ($email in $emails) {
+    # Parallel processing with throttle limit of 10 concurrent jobs
+    $emails | ForEach-Object -Parallel {
+        $email = $_
+        $action = $using:Action
+        $distGroup = $using:DistGroup
+        $results = $using:results
+
         try {
-            if ($Action -eq "Add") {
-                Add-DistributionGroupMember -Identity $DistGroup -Member $email -BypassSecurityGroupManagerCheck -ErrorAction Stop
+            if ($action -eq "Add") {
+                Add-DistributionGroupMember -Identity $distGroup -Member $email -BypassSecurityGroupManagerCheck -ErrorAction Stop
             }
             else {
-                Remove-DistributionGroupMember -Identity $DistGroup -Member $email -BypassSecurityGroupManagerCheck -Confirm:$false -ErrorAction Stop
+                Remove-DistributionGroupMember -Identity $distGroup -Member $email -BypassSecurityGroupManagerCheck -Confirm:$false -ErrorAction Stop
             }
 
-            $success++
-            Write-Host "$Action success: $email" -ForegroundColor Green
-            Start-Sleep -Milliseconds 250
+            $results.Success++
+            Write-Host "$action success: $email" -ForegroundColor Green
         }
         catch {
-            $failed++
-            Write-Host "$Action failed: $email" -ForegroundColor Red
+            $results.Failed++
+            Write-Host "$action failed: $email" -ForegroundColor Red
             Write-Host $_ -ForegroundColor Red
         }
-    }
+    } -ThrottleLimit 10
 
     $members = Get-DistributionGroupMember -Identity $DistGroup -ErrorAction Stop
     $members | Select-Object -ExpandProperty PrimarySmtpAddress | Out-File -FilePath $OutputFile -Encoding UTF8
 
     Write-Host "Completed $Action for group $DistGroup"
-    Write-Host "Success: $success | Failed: $failed"
+    Write-Host "Success: $($results.Success) | Failed: $($results.Failed)"
     Write-Host "Updated members exported to $OutputFile"
+
+    # Output structured result for the Rust backend to parse
+    $resultJson = @{success = $results.Success; failed = $results.Failed } | ConvertTo-Json -Compress
+    Write-Output "RESULT_JSON:$resultJson"
 }
 catch {
     Write-Error $_
@@ -105,4 +129,3 @@ finally {
         # Ignore disconnect errors
     }
 }
-

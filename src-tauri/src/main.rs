@@ -8,8 +8,6 @@ use std::{
     process::Command,
 };
 
-const DEFAULT_DIST_GROUP: &str = "ASWVN_TradeUnion@aswhiteglobal.com";
-
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum GroupAction {
@@ -24,33 +22,20 @@ struct SeedEmails {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct GroupRunResult {
     action: String,
     processed: usize,
+    success_count: usize,
+    failed_count: usize,
     stdout: String,
     stderr: String,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GroupTypeResult {
-    input_email: String,
-    normalized_email: String,
-    group_type: String,
-    raw_type: String,
-    display_name: String,
-    primary_smtp_address: String,
-    graph_allowed: bool,
-}
-
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GroupTypeProbeOutput {
-    group_type: String,
-    raw_type: String,
-    display_name: Option<String>,
-    primary_smtp_address: Option<String>,
-    graph_allowed: Option<bool>,
+struct ResultJson {
+    success: usize,
+    failed: usize,
 }
 
 fn workspace_root() -> PathBuf {
@@ -85,13 +70,6 @@ fn script_path() -> PathBuf {
         .join("manage_distribution_group.ps1")
 }
 
-fn detect_script_path() -> PathBuf {
-    workspace_root()
-        .join("src-tauri")
-        .join("scripts")
-        .join("detect_group_type.ps1")
-}
-
 fn normalize_email(email: &str) -> Option<String> {
     let trimmed = email.trim().to_ascii_lowercase();
     if trimmed.is_empty() || !trimmed.contains('@') {
@@ -122,24 +100,6 @@ fn sanitize_email_input(input: Vec<String>) -> Vec<String> {
     }
 
     cleaned
-}
-
-fn default_group_email() -> String {
-    normalize_email(DEFAULT_DIST_GROUP).unwrap_or_else(|| DEFAULT_DIST_GROUP.to_ascii_lowercase())
-}
-
-fn resolve_group_email(group_email: Option<String>) -> Result<String, String> {
-    if let Some(value) = group_email {
-        return normalize_email(&value).ok_or_else(|| "Invalid group email.".to_string());
-    }
-
-    if let Ok(value) = std::env::var("TRADE_UNION_GROUP") {
-        if let Some(normalized) = normalize_email(&value) {
-            return Ok(normalized);
-        }
-    }
-
-    Ok(default_group_email())
 }
 
 fn read_email_file(path: &Path) -> Result<Vec<String>, String> {
@@ -179,19 +139,23 @@ fn build_command_error(prefix: &str, stdout: &str, stderr: &str) -> String {
     message
 }
 
-fn parse_json_line(stdout: &str) -> Option<&str> {
-    stdout
-        .lines()
-        .rev()
-        .map(str::trim)
-        .find(|line| line.starts_with('{') && line.ends_with('}'))
-}
-
 fn action_name(action: GroupAction) -> &'static str {
     match action {
         GroupAction::Add => "Add",
         GroupAction::Remove => "Remove",
     }
+}
+
+fn parse_result_json(stdout: &str) -> Option<(usize, usize)> {
+    for line in stdout.lines().rev() {
+        let trimmed = line.trim();
+        if let Some(json_str) = trimmed.strip_prefix("RESULT_JSON:") {
+            if let Ok(parsed) = serde_json::from_str::<ResultJson>(json_str) {
+                return Some((parsed.success, parsed.failed));
+            }
+        }
+    }
+    None
 }
 
 #[tauri::command]
@@ -221,54 +185,11 @@ fn save_email_queues(add: Vec<String>, remove: Vec<String>) -> Result<(), String
 }
 
 #[tauri::command]
-fn check_group_type(group_email: String) -> Result<GroupTypeResult, String> {
-    let normalized = normalize_email(&group_email).ok_or_else(|| "Invalid group email.".to_string())?;
-
-    let script = detect_script_path();
-    if !script.exists() {
-        return Err(format!("Missing PowerShell script: {}", script.display()));
-    }
-
-    let output = Command::new("powershell")
-        .arg("-NoProfile")
-        .arg("-ExecutionPolicy")
-        .arg("Bypass")
-        .arg("-File")
-        .arg(script.as_os_str())
-        .arg("-GroupEmail")
-        .arg(&normalized)
-        .output()
-        .map_err(|err| format!("Failed to launch PowerShell: {err}"))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-
-    if !output.status.success() {
-        return Err(build_command_error("Check Group Type failed.", &stdout, &stderr));
-    }
-
-    let json_line = parse_json_line(&stdout)
-        .ok_or_else(|| format!("Cannot parse group type output.\n{stdout}"))?;
-
-    let parsed: GroupTypeProbeOutput = serde_json::from_str(json_line)
-        .map_err(|err| format!("Invalid group type payload: {err}\nRaw: {json_line}"))?;
-
-    Ok(GroupTypeResult {
-        input_email: group_email.trim().to_string(),
-        normalized_email: normalized,
-        group_type: parsed.group_type,
-        raw_type: parsed.raw_type,
-        display_name: parsed.display_name.unwrap_or_default(),
-        primary_smtp_address: parsed.primary_smtp_address.unwrap_or_default(),
-        graph_allowed: parsed.graph_allowed.unwrap_or(false),
-    })
-}
-
-#[tauri::command]
 fn run_group_action(
     action: GroupAction,
     emails: Vec<String>,
     group_email: Option<String>,
+    force_reconnect: Option<bool>,
 ) -> Result<GroupRunResult, String> {
     let cleaned = sanitize_email_input(emails);
     if cleaned.is_empty() {
@@ -283,23 +204,32 @@ fn run_group_action(
         return Err(format!("Missing PowerShell script: {}", script.display()));
     }
 
-    let action_name = action_name(action);
-    let dist_group = resolve_group_email(group_email)?;
+    let act = action_name(action);
+    let dist_group = match group_email {
+        Some(ref value) => normalize_email(value).ok_or_else(|| "Invalid group email.".to_string())?,
+        None => normalize_email("ASWVN_TradeUnion@aswhiteglobal.com").unwrap(),
+    };
 
-    let output = Command::new("powershell")
-        .arg("-NoProfile")
+    let mut cmd = Command::new("powershell");
+    cmd.arg("-NoProfile")
         .arg("-ExecutionPolicy")
         .arg("Bypass")
         .arg("-File")
         .arg(script.as_os_str())
         .arg("-Action")
-        .arg(action_name)
+        .arg(act)
         .arg("-DistGroup")
-        .arg(dist_group)
+        .arg(&dist_group)
         .arg("-InputFile")
         .arg(queue_file.as_os_str())
         .arg("-OutputFile")
-        .arg(final_file_path().as_os_str())
+        .arg(final_file_path().as_os_str());
+
+    if force_reconnect.unwrap_or(false) {
+        cmd.arg("-ForceReconnect");
+    }
+
+    let output = cmd
         .output()
         .map_err(|err| format!("Failed to launch PowerShell: {err}"))?;
 
@@ -308,15 +238,19 @@ fn run_group_action(
 
     if !output.status.success() {
         return Err(build_command_error(
-            &format!("{action_name} action failed."),
+            &format!("{act} action failed."),
             &stdout,
             &stderr,
         ));
     }
 
+    let (success_count, failed_count) = parse_result_json(&stdout).unwrap_or((cleaned.len(), 0));
+
     Ok(GroupRunResult {
-        action: action_name.to_ascii_lowercase(),
+        action: act.to_ascii_lowercase(),
         processed: cleaned.len(),
+        success_count,
+        failed_count,
         stdout,
         stderr,
     })
@@ -327,7 +261,6 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             load_seed_emails,
             save_email_queues,
-            check_group_type,
             run_group_action
         ])
         .run(tauri::generate_context!())
