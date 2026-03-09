@@ -17,6 +17,7 @@ const DEFAULT_GROUP_EMAIL = "ASWVN_TradeUnion@aswhiteglobal.com";
 const GROUP_EMAILS_STORAGE_KEY = "trade-union.group-emails";
 const LEGACY_GROUP_EMAIL_STORAGE_KEY = "trade-union.group-email";
 const LOG_HISTORY_STORAGE_KEY = "trade-union.log-history";
+const BULK_INPUT_SESSION_KEY = "trade-union.bulk-input";
 const LOG_HISTORY_MAX_LINES = 5000;
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -36,7 +37,7 @@ app.innerHTML = `
   <main class="canvas">
     <header class="hero">
       <div class="hero-top">
-        <h1>Trade Union Group Manager</h1>
+        <h1>Group Manager</h1>
         <div class="group-email-inline">
           <label for="group-email">Group:</label>
           <input id="group-email" type="text" placeholder="group1@company.com; group2@company.com" />
@@ -45,7 +46,7 @@ app.innerHTML = `
     </header>
 
     <section class="composer">
-      <label for="bulk-input">Paste email list (split by new lines, commas, or spaces)</label>
+      <label for="bulk-input">Email List</label>
       <div id="bulk-input" class="bulk-editable" contenteditable="true" data-placeholder="alice@company.com&#10;bob@company.com"></div>
       <div class="composer-actions">
         <button id="queue-to-add" class="btn solid">Queue to Add</button>
@@ -192,6 +193,26 @@ function loadLogHistory(): string[] {
 function saveLogHistory(): void {
   try {
     localStorage.setItem(LOG_HISTORY_STORAGE_KEY, JSON.stringify(logHistory.slice(0, LOG_HISTORY_MAX_LINES)));
+  } catch { }
+}
+
+function loadBulkInputFromSession(): string {
+  try {
+    return sessionStorage.getItem(BULK_INPUT_SESSION_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function saveBulkInputToSession(): void {
+  try {
+    sessionStorage.setItem(BULK_INPUT_SESSION_KEY, bulkInput.innerText);
+  } catch { }
+}
+
+function clearBulkInputFromSession(): void {
+  try {
+    sessionStorage.removeItem(BULK_INPUT_SESSION_KEY);
   } catch { }
 }
 
@@ -373,13 +394,14 @@ async function queueFromInput(target: QueueName): Promise<void> {
   render();
   await persistQueues();
   log(`Queued ${emails.length} email(s) into ${target.toUpperCase()}.`);
-  bulkInput.textContent = "";
+  saveBulkInputToSession();
 }
 
 async function clearQueues(): Promise<void> {
   state.add = [];
   state.remove = [];
   bulkInput.textContent = "";
+  clearBulkInputFromSession();
   resultSuccess.style.display = "none";
   resultFail.style.display = "none";
   render();
@@ -537,6 +559,7 @@ function wireDropZone(zone: HTMLUListElement, target: QueueName): void {
 async function initializeEmptyQueues(): Promise<void> {
   state.add = [];
   state.remove = [];
+  bulkInput.textContent = loadBulkInputFromSession();
   render();
   resetLayout(false);
   try {
@@ -562,6 +585,10 @@ groupEmailInput.addEventListener("change", () => {
   if (groups.length) {
     groupEmailInput.value = groups.join(", ");
   }
+});
+
+bulkInput.addEventListener("input", () => {
+  saveBulkInputToSession();
 });
 
 historyModal.addEventListener("click", (event) => {
