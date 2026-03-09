@@ -89,12 +89,12 @@ try {
             }
 
             $successCount++
-            Write-Host "$Action success: $email" -ForegroundColor Green
+            Write-Host "$Action success [$DistGroup]: $email" -ForegroundColor Green
         }
         catch {
             $failedCount++
-            Write-Host "$Action failed: $email" -ForegroundColor Red
-            Write-Host $_ -ForegroundColor Red
+            Write-Host "$Action failed [$DistGroup]: $email" -ForegroundColor Red
+            Write-Host "Error [$DistGroup][$email]: $_" -ForegroundColor Red
         }
     }
 

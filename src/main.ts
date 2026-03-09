@@ -3,11 +3,6 @@ import "./style.css";
 
 type QueueName = "add" | "remove";
 
-interface SeedEmails {
-  add: string[];
-  remove: string[];
-}
-
 interface GroupRunResult {
   action: string;
   processed: number;
@@ -21,6 +16,8 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DEFAULT_GROUP_EMAIL = "ASWVN_TradeUnion@aswhiteglobal.com";
 const GROUP_EMAILS_STORAGE_KEY = "trade-union.group-emails";
 const LEGACY_GROUP_EMAIL_STORAGE_KEY = "trade-union.group-email";
+const LOG_HISTORY_STORAGE_KEY = "trade-union.log-history";
+const LOG_HISTORY_MAX_LINES = 5000;
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 const state: Record<QueueName, string[]> = {
@@ -45,7 +42,6 @@ app.innerHTML = `
           <input id="group-email" type="text" placeholder="group1@company.com; group2@company.com" />
         </div>
       </div>
-      <p>Drag emails between 2 queues. Run Remove to delete users from the distribution group.</p>
     </header>
 
     <section class="composer">
@@ -57,6 +53,8 @@ app.innerHTML = `
         <button id="queue-to-remove" class="btn outline">Queue to Remove</button>
         <span id="remove-count" class="pill-count pill-remove">0</span>
         <button id="clear-queues" class="btn ghost">Clear</button>
+        <button id="undo-swap" class="btn ghost">Undo</button>
+        <button id="view-log-history" class="btn ghost">View Logs</button>
         <div class="action-spacer"></div>
         <span id="result-success" class="result-badge success" style="display:none">✓ 0</span>
         <span id="result-fail" class="result-badge fail" style="display:none">✗ 0</span>
@@ -93,6 +91,19 @@ app.innerHTML = `
       <h3>Activity Log</h3>
       <pre id="log-box"></pre>
     </section>
+
+    <section id="history-modal" class="history-modal hidden" aria-hidden="true">
+      <div class="history-modal-inner">
+        <div class="history-head">
+          <h3>Logs History</h3>
+          <div class="history-actions">
+            <button id="clear-log-history" class="btn ghost">Clear History</button>
+            <button id="close-log-history" class="btn outline">Close</button>
+          </div>
+        </div>
+        <pre id="history-box"></pre>
+      </div>
+    </section>
   </main>
 `;
 
@@ -105,6 +116,8 @@ const logBox = document.querySelector<HTMLPreElement>("#log-box")!;
 const queueToAddBtn = document.querySelector<HTMLButtonElement>("#queue-to-add")!;
 const queueToRemoveBtn = document.querySelector<HTMLButtonElement>("#queue-to-remove")!;
 const clearQueuesBtn = document.querySelector<HTMLButtonElement>("#clear-queues")!;
+const undoSwapBtn = document.querySelector<HTMLButtonElement>("#undo-swap")!;
+const viewLogHistoryBtn = document.querySelector<HTMLButtonElement>("#view-log-history")!;
 const runAddBtn = document.querySelector<HTMLButtonElement>("#run-add")!;
 const runRemoveBtn = document.querySelector<HTMLButtonElement>("#run-remove")!;
 const groupEmailInput = document.querySelector<HTMLInputElement>("#group-email")!;
@@ -116,6 +129,12 @@ const resultSuccess = document.querySelector<HTMLSpanElement>("#result-success")
 const resultFail = document.querySelector<HTMLSpanElement>("#result-fail")!;
 const boardSection = document.querySelector<HTMLElement>("#board")!;
 const activitySection = document.querySelector<HTMLElement>("#activity")!;
+const historyModal = document.querySelector<HTMLElement>("#history-modal")!;
+const historyBox = document.querySelector<HTMLPreElement>("#history-box")!;
+const closeLogHistoryBtn = document.querySelector<HTMLButtonElement>("#close-log-history")!;
+const clearLogHistoryBtn = document.querySelector<HTMLButtonElement>("#clear-log-history")!;
+
+const logHistory = loadLogHistory();
 
 groupEmailInput.value = loadStoredGroupEmails();
 
@@ -158,6 +177,24 @@ function saveGroupEmails(value: string): string[] {
   return parsed;
 }
 
+function loadLogHistory(): string[] {
+  try {
+    const raw = localStorage.getItem(LOG_HISTORY_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is string => typeof item === "string").slice(0, LOG_HISTORY_MAX_LINES);
+  } catch {
+    return [];
+  }
+}
+
+function saveLogHistory(): void {
+  try {
+    localStorage.setItem(LOG_HISTORY_STORAGE_KEY, JSON.stringify(logHistory.slice(0, LOG_HISTORY_MAX_LINES)));
+  } catch { }
+}
+
 function normalizeEmail(email: string): string | null {
   const value = email.trim().toLowerCase();
   if (!value || !EMAIL_REGEX.test(value)) return null;
@@ -183,10 +220,38 @@ function escapeHtml(raw: string): string {
     .replace(/'/g, "&#39;");
 }
 
+function renderLogHistory(): void {
+  historyBox.textContent = logHistory.length
+    ? logHistory.join("\n")
+    : "No logs history yet.";
+}
+
+function openLogHistory(): void {
+  renderLogHistory();
+  historyModal.classList.remove("hidden");
+  historyModal.setAttribute("aria-hidden", "false");
+}
+
+function closeLogHistory(): void {
+  historyModal.classList.add("hidden");
+  historyModal.setAttribute("aria-hidden", "true");
+}
+
+function clearLogHistory(): void {
+  logHistory.length = 0;
+  saveLogHistory();
+  renderLogHistory();
+}
+
 function log(message: string, error = false): void {
   const stamp = new Date().toLocaleTimeString();
   const line = `[${stamp}] ${message}`;
   logBox.textContent = `${line}\n${logBox.textContent ?? ""}`.trim();
+  logHistory.unshift(line);
+  if (logHistory.length > LOG_HISTORY_MAX_LINES) {
+    logHistory.length = LOG_HISTORY_MAX_LINES;
+  }
+  saveLogHistory();
   if (error) logBox.classList.add("error");
 }
 
@@ -323,6 +388,15 @@ async function clearQueues(): Promise<void> {
   log("Cleared ADD and REMOVE queues.");
 }
 
+async function undoSwapQueues(): Promise<void> {
+  const prevAdd = [...state.add];
+  state.add = [...state.remove].sort();
+  state.remove = prevAdd.sort();
+  render();
+  await persistQueues();
+  log("Undo applied: swapped ADD and REMOVE queues.");
+}
+
 // ── Run action ────────────────────────────────────────────────────
 async function runAction(action: QueueName): Promise<void> {
   const payload = [...state[action]];
@@ -354,29 +428,42 @@ async function runAction(action: QueueName): Promise<void> {
 
     let totalSuccess = 0;
     let totalFailed = 0;
+    let groupFatalErrors = 0;
 
     for (let index = 0; index < groups.length; index += 1) {
       const groupEmail = groups[index];
       log(`Running ${action.toUpperCase()} for ${groupEmail} (${index + 1}/${groups.length})...`);
 
-      const result = await invoke<GroupRunResult>("run_group_action", {
-        action,
-        emails: payload,
-        groupEmail,
-        forceReconnect: forceReconnect && index === 0
-      });
+      try {
+        const result = await invoke<GroupRunResult>("run_group_action", {
+          action,
+          emails: payload,
+          groupEmail,
+          forceReconnect: forceReconnect && index === 0
+        });
 
-      totalSuccess += result.successCount;
-      totalFailed += result.failedCount;
+        totalSuccess += result.successCount;
+        totalFailed += result.failedCount;
 
-      log(
-        `Done ${result.action.toUpperCase()} for ${groupEmail}: ${result.successCount} success, ${result.failedCount} failed.`
-      );
-      if (result.stdout) log(result.stdout);
-      if (result.stderr) log(result.stderr, true);
+        log(
+          `Done ${result.action.toUpperCase()} for ${groupEmail}: ${result.successCount} success, ${result.failedCount} failed.`
+        );
+        if (result.stdout) log(result.stdout);
+        if (result.stderr) log(result.stderr, true);
+      } catch (groupError) {
+        groupFatalErrors += 1;
+        totalFailed += payload.length;
+        log(
+          `Group-level failure for ${groupEmail}. Counted ${payload.length} email(s) as failed. ${String(groupError)}`,
+          true
+        );
+      }
     }
 
     showProgressDone(totalSuccess, totalFailed);
+    if (groupFatalErrors > 0) {
+      log(`Completed with ${groupFatalErrors} group-level failure(s).`, true);
+    }
     touchActivity();
   } catch (error) {
     log(String(error), true);
@@ -388,7 +475,16 @@ async function runAction(action: QueueName): Promise<void> {
 }
 
 function setBusy(value: boolean): void {
-  [queueToAddBtn, queueToRemoveBtn, clearQueuesBtn, runAddBtn, runRemoveBtn, groupEmailInput].forEach((el) => {
+  [
+    queueToAddBtn,
+    queueToRemoveBtn,
+    clearQueuesBtn,
+    undoSwapBtn,
+    viewLogHistoryBtn,
+    runAddBtn,
+    runRemoveBtn,
+    groupEmailInput
+  ].forEach((el) => {
     el.disabled = value;
   });
 }
@@ -454,8 +550,12 @@ async function initializeEmptyQueues(): Promise<void> {
 queueToAddBtn.addEventListener("click", () => void queueFromInput("add"));
 queueToRemoveBtn.addEventListener("click", () => void queueFromInput("remove"));
 clearQueuesBtn.addEventListener("click", () => void clearQueues());
+undoSwapBtn.addEventListener("click", () => void undoSwapQueues());
+viewLogHistoryBtn.addEventListener("click", () => openLogHistory());
 runAddBtn.addEventListener("click", () => void runAction("add"));
 runRemoveBtn.addEventListener("click", () => void runAction("remove"));
+closeLogHistoryBtn.addEventListener("click", () => closeLogHistory());
+clearLogHistoryBtn.addEventListener("click", () => clearLogHistory());
 
 groupEmailInput.addEventListener("change", () => {
   const groups = saveGroupEmails(groupEmailInput.value);
@@ -464,8 +564,21 @@ groupEmailInput.addEventListener("change", () => {
   }
 });
 
+historyModal.addEventListener("click", (event) => {
+  if (event.target === historyModal) {
+    closeLogHistory();
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !historyModal.classList.contains("hidden")) {
+    closeLogHistory();
+  }
+});
+
 // ── Init ──────────────────────────────────────────────────────────
 wireDropZone(addZone, "add");
 wireDropZone(removeZone, "remove");
+renderLogHistory();
 void initializeEmptyQueues();
 
