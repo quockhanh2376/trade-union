@@ -1,0 +1,5 @@
+Trade Union Group Manager v1.1.0 release asset checksums
+Generated on 2026-03-09
+
+EFD41E402191DBC4D8890C36A629D11890115F889F1DEEFA396C08D9D555916D  src-tauri/target/release/bundle/msi/Trade Union Group Manager_1.1.0_x64_en-US.msi
+F374DB01D459D872ED65C52A30B145BEB5989563188A96B5C2EED2F3D53D4B8E  src-tauri/target/release/bundle/nsis/Trade Union Group Manager_1.1.0_x64-setup.exe
