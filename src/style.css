@@ -96,7 +96,7 @@ body {
 }
 
 .group-email-inline input {
-  min-width: 280px;
+  min-width: 420px;
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 8px 10px;
@@ -478,6 +478,18 @@ body {
   background: rgba(20, 30, 47, 0.45);
 }
 
+#clear-queues {
+  color: #ff9baa;
+  border-color: #8a3f4d;
+  background: rgba(138, 63, 77, 0.18);
+}
+
+#clear-queues:hover:not(:disabled) {
+  color: #ffd1da;
+  border-color: #b14f62;
+  background: rgba(138, 63, 77, 0.3);
+}
+
 .btn.danger {
   background: var(--danger);
   color: #2f0f15;
@@ -508,6 +520,10 @@ body {
 
 .activity.expanded {
   min-height: 400px;
+}
+
+.activity.closed {
+  display: none;
 }
 
 .activity h3 {

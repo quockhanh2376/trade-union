@@ -19,7 +19,8 @@ interface GroupRunResult {
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DEFAULT_GROUP_EMAIL = "ASWVN_TradeUnion@aswhiteglobal.com";
-const GROUP_EMAIL_STORAGE_KEY = "trade-union.group-email";
+const GROUP_EMAILS_STORAGE_KEY = "trade-union.group-emails";
+const LEGACY_GROUP_EMAIL_STORAGE_KEY = "trade-union.group-email";
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 const state: Record<QueueName, string[]> = {
@@ -41,7 +42,7 @@ app.innerHTML = `
         <h1>Trade Union Group Manager</h1>
         <div class="group-email-inline">
           <label for="group-email">Group:</label>
-          <input id="group-email" type="email" placeholder="ASWVN_TradeUnion@aswhiteglobal.com" />
+          <input id="group-email" type="text" placeholder="group1@company.com; group2@company.com" />
         </div>
       </div>
       <p>Drag emails between 2 queues. Run Remove to delete users from the distribution group.</p>
@@ -55,6 +56,7 @@ app.innerHTML = `
         <span id="add-count" class="pill-count">0</span>
         <button id="queue-to-remove" class="btn outline">Queue to Remove</button>
         <span id="remove-count" class="pill-count pill-remove">0</span>
+        <button id="clear-queues" class="btn ghost">Clear</button>
         <div class="action-spacer"></div>
         <span id="result-success" class="result-badge success" style="display:none">✓ 0</span>
         <span id="result-fail" class="result-badge fail" style="display:none">✗ 0</span>
@@ -102,6 +104,7 @@ const removeCount = document.querySelector<HTMLSpanElement>("#remove-count")!;
 const logBox = document.querySelector<HTMLPreElement>("#log-box")!;
 const queueToAddBtn = document.querySelector<HTMLButtonElement>("#queue-to-add")!;
 const queueToRemoveBtn = document.querySelector<HTMLButtonElement>("#queue-to-remove")!;
+const clearQueuesBtn = document.querySelector<HTMLButtonElement>("#clear-queues")!;
 const runAddBtn = document.querySelector<HTMLButtonElement>("#run-add")!;
 const runRemoveBtn = document.querySelector<HTMLButtonElement>("#run-remove")!;
 const groupEmailInput = document.querySelector<HTMLInputElement>("#group-email")!;
@@ -114,7 +117,7 @@ const resultFail = document.querySelector<HTMLSpanElement>("#result-fail")!;
 const boardSection = document.querySelector<HTMLElement>("#board")!;
 const activitySection = document.querySelector<HTMLElement>("#activity")!;
 
-groupEmailInput.value = loadStoredGroupEmail();
+groupEmailInput.value = loadStoredGroupEmails();
 
 // ── Activity tracking ─────────────────────────────────────────────
 function touchActivity(): void {
@@ -130,18 +133,29 @@ document.addEventListener("keydown", touchActivity);
 document.addEventListener("dragstart", touchActivity);
 
 // ── Helpers ───────────────────────────────────────────────────────
-function loadStoredGroupEmail(): string {
+function loadStoredGroupEmails(): string {
   try {
-    const saved = localStorage.getItem(GROUP_EMAIL_STORAGE_KEY);
-    if (!saved) return DEFAULT_GROUP_EMAIL;
-    return normalizeEmail(saved) ?? DEFAULT_GROUP_EMAIL;
+    const saved =
+      localStorage.getItem(GROUP_EMAILS_STORAGE_KEY) ??
+      localStorage.getItem(LEGACY_GROUP_EMAIL_STORAGE_KEY);
+    const parsed = parseEmails(saved ?? "");
+    if (!parsed.length) return DEFAULT_GROUP_EMAIL;
+    return parsed.join(", ");
   } catch {
     return DEFAULT_GROUP_EMAIL;
   }
 }
 
-function saveGroupEmail(value: string): void {
-  try { localStorage.setItem(GROUP_EMAIL_STORAGE_KEY, value); } catch { }
+function saveGroupEmails(value: string): string[] {
+  const parsed = parseEmails(value);
+  if (!parsed.length) return [];
+
+  const serialized = parsed.join(", ");
+  try {
+    localStorage.setItem(GROUP_EMAILS_STORAGE_KEY, serialized);
+    localStorage.setItem(LEGACY_GROUP_EMAIL_STORAGE_KEY, parsed[0]);
+  } catch { }
+  return parsed;
 }
 
 function normalizeEmail(email: string): string | null {
@@ -241,6 +255,22 @@ function hideProgress(): void {
   progressFill.classList.remove("indeterminate", "has-errors");
 }
 
+function showRunningLayout(): void {
+  document.querySelectorAll(".drop-list").forEach((el) => el.classList.add("collapsed"));
+  document.querySelectorAll(".lane").forEach((el) => el.classList.add("compact"));
+  activitySection.classList.remove("closed");
+  activitySection.classList.add("expanded");
+}
+
+function resetLayout(closeActivityLog: boolean): void {
+  document.querySelectorAll(".drop-list").forEach((el) => el.classList.remove("collapsed"));
+  document.querySelectorAll(".lane").forEach((el) => el.classList.remove("compact"));
+  activitySection.classList.remove("expanded");
+  if (closeActivityLog) {
+    activitySection.classList.add("closed");
+  }
+}
+
 // ── Queue operations ──────────────────────────────────────────────
 function ensureInQueue(target: QueueName, emails: string[]): void {
   const opposite: QueueName = target === "add" ? "remove" : "add";
@@ -281,6 +311,18 @@ async function queueFromInput(target: QueueName): Promise<void> {
   bulkInput.textContent = "";
 }
 
+async function clearQueues(): Promise<void> {
+  state.add = [];
+  state.remove = [];
+  bulkInput.textContent = "";
+  resultSuccess.style.display = "none";
+  resultFail.style.display = "none";
+  render();
+  await persistQueues();
+  resetLayout(true);
+  log("Cleared ADD and REMOVE queues.");
+}
+
 // ── Run action ────────────────────────────────────────────────────
 async function runAction(action: QueueName): Promise<void> {
   const payload = [...state[action]];
@@ -289,13 +331,12 @@ async function runAction(action: QueueName): Promise<void> {
     return;
   }
 
-  const normalizedGroup = normalizeEmail(groupEmailInput.value);
-  if (!normalizedGroup) {
-    log("Please enter a valid group email before running actions.", true);
+  const groups = saveGroupEmails(groupEmailInput.value);
+  if (!groups.length) {
+    log("Please enter at least one valid group email before running actions.", true);
     return;
   }
-
-  saveGroupEmail(normalizedGroup);
+  groupEmailInput.value = groups.join(", ");
 
   const forceReconnect = isIdle();
   if (forceReconnect) {
@@ -303,50 +344,54 @@ async function runAction(action: QueueName): Promise<void> {
   }
 
   setBusy(true);
-  showProgressIndeterminate(`${action === "add" ? "Adding" : "Removing"} ${payload.length} email(s)…`);
-
-  // Collapse email lists only, keep headers + run buttons visible
-  document.querySelectorAll(".drop-list").forEach(el => el.classList.add("collapsed"));
-  document.querySelectorAll(".lane-hint").forEach(el => (el as HTMLElement).style.display = "none");
-  document.querySelectorAll(".lane").forEach(el => el.classList.add("compact"));
-  activitySection.classList.add("expanded");
+  showProgressIndeterminate(
+    `${action === "add" ? "Adding" : "Removing"} ${payload.length} email(s) for ${groups.length} group(s)...`
+  );
+  showRunningLayout();
 
   try {
     await persistQueues();
 
-    const result = await invoke<GroupRunResult>("run_group_action", {
-      action,
-      emails: payload,
-      groupEmail: normalizedGroup,
-      forceReconnect
-    });
+    let totalSuccess = 0;
+    let totalFailed = 0;
 
-    log(`Done ${result.action.toUpperCase()}: ${result.successCount} success, ${result.failedCount} failed.`);
-    if (result.stdout) log(result.stdout);
-    if (result.stderr) log(result.stderr, true);
+    for (let index = 0; index < groups.length; index += 1) {
+      const groupEmail = groups[index];
+      log(`Running ${action.toUpperCase()} for ${groupEmail} (${index + 1}/${groups.length})...`);
 
-    showProgressDone(result.successCount, result.failedCount);
+      const result = await invoke<GroupRunResult>("run_group_action", {
+        action,
+        emails: payload,
+        groupEmail,
+        forceReconnect: forceReconnect && index === 0
+      });
 
-    state[action] = [];
-    render();
-    await persistQueues();
-    await loadSeedEmails();
+      totalSuccess += result.successCount;
+      totalFailed += result.failedCount;
+
+      log(
+        `Done ${result.action.toUpperCase()} for ${groupEmail}: ${result.successCount} success, ${result.failedCount} failed.`
+      );
+      if (result.stdout) log(result.stdout);
+      if (result.stderr) log(result.stderr, true);
+    }
+
+    showProgressDone(totalSuccess, totalFailed);
     touchActivity();
   } catch (error) {
     log(String(error), true);
     hideProgress();
   } finally {
     setBusy(false);
+    resetLayout(true);
   }
 }
 
 function setBusy(value: boolean): void {
-  [queueToAddBtn, queueToRemoveBtn, runAddBtn, runRemoveBtn, groupEmailInput].forEach((el) => {
+  [queueToAddBtn, queueToRemoveBtn, clearQueuesBtn, runAddBtn, runRemoveBtn, groupEmailInput].forEach((el) => {
     el.disabled = value;
   });
 }
-
-// ── Drag & Drop ───────────────────────────────────────────────────
 function bindDynamicEvents(): void {
   document.querySelectorAll<HTMLLIElement>(".email-item").forEach((item) => {
     item.addEventListener("dragstart", (event: DragEvent) => {
@@ -393,40 +438,34 @@ function wireDropZone(zone: HTMLUListElement, target: QueueName): void {
 }
 
 // ── Load seed files ───────────────────────────────────────────────
-async function loadSeedEmails(): Promise<void> {
+async function initializeEmptyQueues(): Promise<void> {
+  state.add = [];
+  state.remove = [];
+  render();
+  resetLayout(false);
   try {
-    const result = await invoke<SeedEmails>("load_seed_emails");
-    const addSet = new Set(
-      result.add.map((i) => normalizeEmail(i)).filter((v): v is string => v !== null)
-    );
-    const removeSet = new Set(
-      result.remove.map((i) => normalizeEmail(i)).filter((v): v is string => v !== null)
-    );
-    removeSet.forEach((email) => addSet.delete(email));
-    state.add = [...addSet].sort();
-    state.remove = [...removeSet].sort();
-    render();
-    log("Loaded queues from emails.txt + removeemail.txt.");
+    await persistQueues();
   } catch (error) {
-    log(`Cannot load queue files: ${String(error)}`, true);
+    log(`Cannot initialize empty queues: ${String(error)}`, true);
   }
 }
 
 // ── Event listeners ───────────────────────────────────────────────
 queueToAddBtn.addEventListener("click", () => void queueFromInput("add"));
 queueToRemoveBtn.addEventListener("click", () => void queueFromInput("remove"));
+clearQueuesBtn.addEventListener("click", () => void clearQueues());
 runAddBtn.addEventListener("click", () => void runAction("add"));
 runRemoveBtn.addEventListener("click", () => void runAction("remove"));
 
 groupEmailInput.addEventListener("change", () => {
-  const normalized = normalizeEmail(groupEmailInput.value);
-  if (normalized) {
-    groupEmailInput.value = normalized;
-    saveGroupEmail(normalized);
+  const groups = saveGroupEmails(groupEmailInput.value);
+  if (groups.length) {
+    groupEmailInput.value = groups.join(", ");
   }
 });
 
 // ── Init ──────────────────────────────────────────────────────────
 wireDropZone(addZone, "add");
 wireDropZone(removeZone, "remove");
-void loadSeedEmails();
+void initializeEmptyQueues();
+

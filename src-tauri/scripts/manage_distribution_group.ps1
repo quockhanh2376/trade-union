@@ -75,46 +75,38 @@ try {
         Write-Host "No valid emails found in $InputFile"
     }
 
-    # Thread-safe counters using synchronized hashtable
-    $results = [hashtable]::Synchronized(@{
-            Success = 0
-            Failed  = 0
-        })
+    # Keep processing compatible with Windows PowerShell 5.1 (no -Parallel support)
+    $successCount = 0
+    $failedCount = 0
 
-    # Parallel processing with throttle limit of 10 concurrent jobs
-    $emails | ForEach-Object -Parallel {
-        $email = $_
-        $action = $using:Action
-        $distGroup = $using:DistGroup
-        $results = $using:results
-
+    foreach ($email in $emails) {
         try {
-            if ($action -eq "Add") {
-                Add-DistributionGroupMember -Identity $distGroup -Member $email -BypassSecurityGroupManagerCheck -ErrorAction Stop
+            if ($Action -eq "Add") {
+                Add-DistributionGroupMember -Identity $DistGroup -Member $email -BypassSecurityGroupManagerCheck -ErrorAction Stop
             }
             else {
-                Remove-DistributionGroupMember -Identity $distGroup -Member $email -BypassSecurityGroupManagerCheck -Confirm:$false -ErrorAction Stop
+                Remove-DistributionGroupMember -Identity $DistGroup -Member $email -BypassSecurityGroupManagerCheck -Confirm:$false -ErrorAction Stop
             }
 
-            $results.Success++
-            Write-Host "$action success: $email" -ForegroundColor Green
+            $successCount++
+            Write-Host "$Action success: $email" -ForegroundColor Green
         }
         catch {
-            $results.Failed++
-            Write-Host "$action failed: $email" -ForegroundColor Red
+            $failedCount++
+            Write-Host "$Action failed: $email" -ForegroundColor Red
             Write-Host $_ -ForegroundColor Red
         }
-    } -ThrottleLimit 10
+    }
 
     $members = Get-DistributionGroupMember -Identity $DistGroup -ErrorAction Stop
     $members | Select-Object -ExpandProperty PrimarySmtpAddress | Out-File -FilePath $OutputFile -Encoding UTF8
 
     Write-Host "Completed $Action for group $DistGroup"
-    Write-Host "Success: $($results.Success) | Failed: $($results.Failed)"
+    Write-Host "Success: $successCount | Failed: $failedCount"
     Write-Host "Updated members exported to $OutputFile"
 
     # Output structured result for the Rust backend to parse
-    $resultJson = @{success = $results.Success; failed = $results.Failed } | ConvertTo-Json -Compress
+    $resultJson = @{success = $successCount; failed = $failedCount } | ConvertTo-Json -Compress
     Write-Output "RESULT_JSON:$resultJson"
 }
 catch {
