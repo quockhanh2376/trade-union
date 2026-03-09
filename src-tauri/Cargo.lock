@@ -3587,7 +3587,7 @@ dependencies = [
 
 [[package]]
 name = "trade_union_mini_app"
-version = "1.1.0"
+version = "1.1.7"
 dependencies = [
  "serde",
  "serde_json",

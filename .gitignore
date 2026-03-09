@@ -15,6 +15,7 @@ src-tauri/target/
 emails.txt
 removeemail.txt
 final.txt
+.credentials/
 
 # OS files
 Thumbs.db

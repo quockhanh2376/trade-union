@@ -52,7 +52,8 @@ body {
 .composer,
 .lane,
 .activity,
-.progress-section {
+.progress-section,
+.result-table-section {
   border: 1px solid var(--line);
   border-radius: 18px;
   background: linear-gradient(155deg, rgba(17, 26, 42, 0.95) 0%, rgba(11, 18, 32, 0.95) 100%);
@@ -83,20 +84,32 @@ body {
   color: var(--text-soft);
 }
 
-.group-email-inline {
+.hero-controls {
+  width: min(68vw, 760px);
+  display: grid;
+  gap: 8px;
+}
+
+.group-email-inline,
+.admin-upn-inline,
+.admin-password-inline {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: min(68vw, 760px);
+  width: 100%;
 }
 
-.group-email-inline label {
+.group-email-inline label,
+.admin-upn-inline label,
+.admin-password-inline label {
   color: var(--text-soft);
   font-size: 0.9rem;
   white-space: nowrap;
 }
 
-.group-email-inline input {
+.group-email-inline input,
+.admin-upn-inline input,
+.admin-password-inline input {
   width: 100%;
   min-width: 520px;
   border: 1px solid var(--line);
@@ -109,9 +122,15 @@ body {
   font-size: 0.88rem;
 }
 
-.group-email-inline input:focus {
+.group-email-inline input:focus,
+.admin-upn-inline input:focus,
+.admin-password-inline input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--glow);
+}
+
+.admin-password-inline input {
+  min-width: 360px;
 }
 
 .composer {
@@ -425,6 +444,59 @@ body {
   box-shadow: 0 0 8px rgba(255, 93, 114, 0.25);
 }
 
+.result-table-section {
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.result-table-section h3 {
+  margin: 0;
+}
+
+.result-table-wrap {
+  max-height: 230px;
+  overflow: auto;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(7, 12, 21, 0.9);
+}
+
+.result-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: "Consolas", "Cascadia Mono", monospace;
+  font-size: 0.83rem;
+}
+
+.result-table th,
+.result-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  text-align: left;
+  vertical-align: top;
+}
+
+.result-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #162238;
+  color: #d4e1fb;
+}
+
+.result-table .cell-status {
+  font-weight: 700;
+}
+
+.result-table tr.status-ok .cell-status {
+  color: #6effd6;
+}
+
+.result-table tr.status-fail .cell-status {
+  color: #ff9baa;
+}
+
 @keyframes indeterminate {
   0% {
     transform: translateX(-100%);
@@ -631,11 +703,15 @@ body {
     align-items: flex-start;
   }
 
-  .group-email-inline {
+  .group-email-inline,
+  .admin-upn-inline,
+  .admin-password-inline {
     width: 100%;
   }
 
-  .group-email-inline input {
+  .group-email-inline input,
+  .admin-upn-inline input,
+  .admin-password-inline input {
     flex: 1;
     min-width: 0;
   }

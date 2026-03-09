@@ -8,18 +8,28 @@ interface GroupRunResult {
   processed: number;
   successCount: number;
   failedCount: number;
+  details: ActionDetail[];
   stdout: string;
   stderr: string;
+}
+
+interface ActionDetail {
+  email: string;
+  group: string;
+  status: string;
+  message?: string;
 }
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DEFAULT_GROUP_EMAIL = "ASWVN_TradeUnion@aswhiteglobal.com";
 const GROUP_EMAILS_STORAGE_KEY = "trade-union.group-emails";
 const LEGACY_GROUP_EMAIL_STORAGE_KEY = "trade-union.group-email";
+const ADMIN_UPN_STORAGE_KEY = "trade-union.admin-upn";
 const LOG_HISTORY_STORAGE_KEY = "trade-union.log-history";
 const BULK_INPUT_SESSION_KEY = "trade-union.bulk-input";
 const LOG_HISTORY_MAX_LINES = 5000;
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const CREDENTIAL_FORGET_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
 const state: Record<QueueName, string[]> = {
   add: [],
@@ -27,6 +37,8 @@ const state: Record<QueueName, string[]> = {
 };
 
 let lastActivityTimestamp = Date.now();
+let credentialAutoForgetTriggered = false;
+let credentialAutoForgetRunning = false;
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) {
@@ -38,9 +50,19 @@ app.innerHTML = `
     <header class="hero">
       <div class="hero-top">
         <h1>Group Manager</h1>
-        <div class="group-email-inline">
-          <label for="group-email">Group:</label>
-          <input id="group-email" type="text" placeholder="group1@company.com; group2@company.com" />
+        <div class="hero-controls">
+          <div class="group-email-inline">
+            <label for="group-email">Group:</label>
+            <input id="group-email" type="text" placeholder="group1@company.com; group2@company.com" />
+          </div>
+          <div class="admin-upn-inline">
+            <label for="admin-upn">Admin:</label>
+            <input id="admin-upn" type="text" placeholder="admin@aswhiteglobal.com" />
+          </div>
+          <div class="admin-password-inline">
+            <label for="admin-password">Password:</label>
+            <input id="admin-password" type="password" placeholder="Enter admin password" autocomplete="off" />
+          </div>
         </div>
       </div>
     </header>
@@ -88,6 +110,22 @@ app.innerHTML = `
       </div>
     </section>
 
+    <section class="result-table-section" id="result-table-section" style="display:none;">
+      <h3>Result Details</h3>
+      <div class="result-table-wrap">
+        <table class="result-table">
+          <thead>
+            <tr>
+              <th>Email</th>
+              <th>Group</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="result-table-body"></tbody>
+        </table>
+      </div>
+    </section>
+
     <section class="activity" id="activity">
       <h3>Activity Log</h3>
       <pre id="log-box"></pre>
@@ -122,10 +160,14 @@ const viewLogHistoryBtn = document.querySelector<HTMLButtonElement>("#view-log-h
 const runAddBtn = document.querySelector<HTMLButtonElement>("#run-add")!;
 const runRemoveBtn = document.querySelector<HTMLButtonElement>("#run-remove")!;
 const groupEmailInput = document.querySelector<HTMLInputElement>("#group-email")!;
+const adminUpnInput = document.querySelector<HTMLInputElement>("#admin-upn")!;
+const adminPasswordInput = document.querySelector<HTMLInputElement>("#admin-password")!;
 const progressSection = document.querySelector<HTMLElement>("#progress-section")!;
 const progressLabel = document.querySelector<HTMLSpanElement>("#progress-label")!;
 const progressPercent = document.querySelector<HTMLSpanElement>("#progress-percent")!;
 const progressFill = document.querySelector<HTMLDivElement>("#progress-fill")!;
+const resultTableSection = document.querySelector<HTMLElement>("#result-table-section")!;
+const resultTableBody = document.querySelector<HTMLTableSectionElement>("#result-table-body")!;
 const resultSuccess = document.querySelector<HTMLSpanElement>("#result-success")!;
 const resultFail = document.querySelector<HTMLSpanElement>("#result-fail")!;
 const boardSection = document.querySelector<HTMLElement>("#board")!;
@@ -138,10 +180,13 @@ const clearLogHistoryBtn = document.querySelector<HTMLButtonElement>("#clear-log
 const logHistory = loadLogHistory();
 
 groupEmailInput.value = loadStoredGroupEmails();
+adminUpnInput.value = loadStoredAdminUpn();
+void refreshSavedAdminCredentialHint();
 
 // ── Activity tracking ─────────────────────────────────────────────
 function touchActivity(): void {
   lastActivityTimestamp = Date.now();
+  credentialAutoForgetTriggered = false;
 }
 
 function isIdle(): boolean {
@@ -176,6 +221,83 @@ function saveGroupEmails(value: string): string[] {
     localStorage.setItem(LEGACY_GROUP_EMAIL_STORAGE_KEY, parsed[0]);
   } catch { }
   return parsed;
+}
+
+function loadStoredAdminUpn(): string {
+  try {
+    const saved = localStorage.getItem(ADMIN_UPN_STORAGE_KEY);
+    if (!saved) return "";
+    return normalizeEmail(saved) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function saveAdminUpn(value: string): void {
+  try {
+    localStorage.setItem(ADMIN_UPN_STORAGE_KEY, value);
+  } catch { }
+}
+
+async function refreshSavedAdminCredentialHint(): Promise<void> {
+  const normalized = normalizeEmail(adminUpnInput.value);
+  if (!normalized) {
+    adminPasswordInput.placeholder = "Enter admin password";
+    return;
+  }
+
+  try {
+    const hasSaved = await invoke<boolean>("has_saved_admin_credential", { adminUpn: normalized });
+    adminPasswordInput.placeholder = hasSaved
+      ? "Saved password found (leave blank to reuse)"
+      : "Enter admin password (saved securely)";
+  } catch {
+    adminPasswordInput.placeholder = "Enter admin password";
+  }
+}
+
+function isIdleForCredentialForget(): boolean {
+  return Date.now() - lastActivityTimestamp > CREDENTIAL_FORGET_TIMEOUT_MS;
+}
+
+async function clearSavedCredential(reason: string, errorContext: string): Promise<void> {
+  try {
+    await invoke("clear_saved_admin_credential");
+    adminPasswordInput.value = "";
+    await refreshSavedAdminCredentialHint();
+    log(reason);
+  } catch (error) {
+    log(`${errorContext}: ${String(error)}`, true);
+  }
+}
+
+async function autoForgetCredentialIfIdle(): Promise<void> {
+  if (credentialAutoForgetRunning || credentialAutoForgetTriggered) return;
+  if (!isIdleForCredentialForget()) return;
+
+  const normalized = normalizeEmail(adminUpnInput.value);
+  if (!normalized) {
+    credentialAutoForgetTriggered = true;
+    return;
+  }
+
+  credentialAutoForgetRunning = true;
+  try {
+    const hasSaved = await invoke<boolean>("has_saved_admin_credential", { adminUpn: normalized });
+    if (!hasSaved) {
+      credentialAutoForgetTriggered = true;
+      await refreshSavedAdminCredentialHint();
+      return;
+    }
+
+    await clearSavedCredential(
+      "Auto forgot saved admin password after 10 minutes of inactivity.",
+      "Cannot auto forget saved admin password"
+    );
+    credentialAutoForgetTriggered = true;
+  } finally {
+    credentialAutoForgetRunning = false;
+  }
 }
 
 function loadLogHistory(): string[] {
@@ -303,6 +425,87 @@ function render(): void {
   bindDynamicEvents();
 }
 
+function normalizeStatus(value: string): "ok" | "fail" {
+  return value.trim().toLowerCase() === "ok" ? "ok" : "fail";
+}
+
+function renderResultDetails(details: ActionDetail[]): void {
+  if (!details.length) {
+    resultTableBody.innerHTML = "";
+    resultTableSection.style.display = "none";
+    return;
+  }
+
+  resultTableBody.innerHTML = details
+    .map((item) => {
+      const status = normalizeStatus(item.status);
+      const statusLabel = status === "ok" ? "Ok" : "Fail";
+      const note = item.message?.trim() ?? "";
+      const rowTitle = note ? ` title="${escapeHtml(note)}"` : "";
+      return `
+        <tr class="status-${status}"${rowTitle}>
+          <td>${escapeHtml(item.email)}</td>
+          <td>${escapeHtml(item.group)}</td>
+          <td class="cell-status">${statusLabel}</td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  resultTableSection.style.display = "";
+}
+
+async function autoRemoveCompletedEmails(
+  action: QueueName,
+  payload: string[],
+  groups: string[],
+  details: ActionDetail[],
+  failedCount: number
+): Promise<void> {
+  let removable = new Set<string>();
+
+  if (details.length) {
+    const expectedGroups = groups.length;
+    const stats = new Map<string, { okGroups: Set<string>; hasFail: boolean }>();
+
+    details.forEach((item) => {
+      const email = normalizeEmail(item.email);
+      const group = normalizeEmail(item.group);
+      if (!email || !group) return;
+
+      if (!stats.has(email)) {
+        stats.set(email, { okGroups: new Set<string>(), hasFail: false });
+      }
+
+      const record = stats.get(email)!;
+      if (normalizeStatus(item.status) === "ok") {
+        record.okGroups.add(group);
+      } else {
+        record.hasFail = true;
+      }
+    });
+
+    payload.forEach((email) => {
+      const record = stats.get(email);
+      if (!record) return;
+      if (!record.hasFail && record.okGroups.size === expectedGroups) {
+        removable.add(email);
+      }
+    });
+  } else if (failedCount === 0) {
+    removable = new Set(payload);
+  }
+
+  if (!removable.size) {
+    return;
+  }
+
+  state[action] = state[action].filter((email) => !removable.has(email));
+  render();
+  await persistQueues();
+  log(`Auto removed ${removable.size} completed email(s) from ${action.toUpperCase()} queue.`);
+}
+
 // ── Progress bar ──────────────────────────────────────────────────
 function showProgressIndeterminate(label: string): void {
   progressSection.style.display = "";
@@ -401,6 +604,7 @@ async function clearQueues(): Promise<void> {
   state.add = [];
   state.remove = [];
   bulkInput.textContent = "";
+  renderResultDetails([]);
   clearBulkInputFromSession();
   resultSuccess.style.display = "none";
   resultFail.style.display = "none";
@@ -434,6 +638,22 @@ async function runAction(action: QueueName): Promise<void> {
   }
   groupEmailInput.value = groups.join(", ");
 
+  const adminUpnValue = adminUpnInput.value.trim();
+  const adminUpn = adminUpnValue ? normalizeEmail(adminUpnValue) : null;
+  if (adminUpnValue && !adminUpn) {
+    log("Admin account email is invalid.", true);
+    return;
+  }
+  if (adminUpn) {
+    adminUpnInput.value = adminUpn;
+    saveAdminUpn(adminUpn);
+  }
+  const adminPassword = adminPasswordInput.value;
+  if (adminPassword.trim().length > 0 && !adminUpn) {
+    log("Please enter a valid admin account before saving password.", true);
+    return;
+  }
+
   const forceReconnect = isIdle();
   if (forceReconnect) {
     log("Idle for more than 5 minutes. Will re-authenticate with Microsoft.");
@@ -447,50 +667,34 @@ async function runAction(action: QueueName): Promise<void> {
 
   try {
     await persistQueues();
+    log("Opening Microsoft sign-in window. Complete 2FA when prompted.");
 
-    let totalSuccess = 0;
-    let totalFailed = 0;
-    let groupFatalErrors = 0;
+    const result = await invoke<GroupRunResult>("run_group_action", {
+      action,
+      emails: payload,
+      groupEmails: groups,
+      adminUpn: adminUpn ?? null,
+      adminPassword: adminPassword.trim().length ? adminPassword : null,
+      forceReconnect
+    });
 
-    for (let index = 0; index < groups.length; index += 1) {
-      const groupEmail = groups[index];
-      log(`Running ${action.toUpperCase()} for ${groupEmail} (${index + 1}/${groups.length})...`);
-
-      try {
-        const result = await invoke<GroupRunResult>("run_group_action", {
-          action,
-          emails: payload,
-          groupEmail,
-          forceReconnect: forceReconnect && index === 0
-        });
-
-        totalSuccess += result.successCount;
-        totalFailed += result.failedCount;
-
-        log(
-          `Done ${result.action.toUpperCase()} for ${groupEmail}: ${result.successCount} success, ${result.failedCount} failed.`
-        );
-        if (result.stdout) log(result.stdout);
-        if (result.stderr) log(result.stderr, true);
-      } catch (groupError) {
-        groupFatalErrors += 1;
-        totalFailed += payload.length;
-        log(
-          `Group-level failure for ${groupEmail}. Counted ${payload.length} email(s) as failed. ${String(groupError)}`,
-          true
-        );
-      }
+    log(`Done ${result.action.toUpperCase()} for ${groups.length} group(s): ${result.successCount} success, ${result.failedCount} failed.`);
+    if (result.stdout) log(result.stdout);
+    if (result.stderr) log(result.stderr, true);
+    renderResultDetails(result.details ?? []);
+    await autoRemoveCompletedEmails(action, payload, groups, result.details ?? [], result.failedCount);
+    if (adminPassword.trim().length) {
+      log("Admin password saved securely for this Windows user.");
     }
 
-    showProgressDone(totalSuccess, totalFailed);
-    if (groupFatalErrors > 0) {
-      log(`Completed with ${groupFatalErrors} group-level failure(s).`, true);
-    }
+    showProgressDone(result.successCount, result.failedCount);
     touchActivity();
   } catch (error) {
     log(String(error), true);
     hideProgress();
   } finally {
+    adminPasswordInput.value = "";
+    void refreshSavedAdminCredentialHint();
     setBusy(false);
     resetLayout(true);
   }
@@ -505,7 +709,9 @@ function setBusy(value: boolean): void {
     viewLogHistoryBtn,
     runAddBtn,
     runRemoveBtn,
-    groupEmailInput
+    groupEmailInput,
+    adminUpnInput,
+    adminPasswordInput
   ].forEach((el) => {
     el.disabled = value;
   });
@@ -587,6 +793,18 @@ groupEmailInput.addEventListener("change", () => {
   }
 });
 
+adminUpnInput.addEventListener("change", () => {
+  const normalized = normalizeEmail(adminUpnInput.value);
+  if (!normalized) {
+    adminUpnInput.value = "";
+    void refreshSavedAdminCredentialHint();
+    return;
+  }
+  adminUpnInput.value = normalized;
+  saveAdminUpn(normalized);
+  void refreshSavedAdminCredentialHint();
+});
+
 bulkInput.addEventListener("input", () => {
   saveBulkInputToSession();
 });
@@ -604,6 +822,14 @@ document.addEventListener("keydown", (event) => {
 });
 
 // ── Init ──────────────────────────────────────────────────────────
+setInterval(() => {
+  void autoForgetCredentialIfIdle();
+}, 15000);
+
+window.addEventListener("beforeunload", () => {
+  void invoke("clear_saved_admin_credential");
+});
+
 wireDropZone(addZone, "add");
 wireDropZone(removeZone, "remove");
 renderLogHistory();
