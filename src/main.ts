@@ -28,15 +28,14 @@ const ADMIN_UPN_STORAGE_KEY = "trade-union.admin-upn";
 const LOG_HISTORY_STORAGE_KEY = "trade-union.log-history";
 const BULK_INPUT_SESSION_KEY = "trade-union.bulk-input";
 const LOG_HISTORY_MAX_LINES = 5000;
-const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-const CREDENTIAL_FORGET_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const AUTH_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 const state: Record<QueueName, string[]> = {
   add: [],
   remove: []
 };
 
-let lastActivityTimestamp = Date.now();
+let authSessionExpiresAt = 0;
 let credentialAutoForgetTriggered = false;
 let credentialAutoForgetRunning = false;
 
@@ -183,19 +182,20 @@ groupEmailInput.value = loadStoredGroupEmails();
 adminUpnInput.value = loadStoredAdminUpn();
 void refreshSavedAdminCredentialHint();
 
-// ── Activity tracking ─────────────────────────────────────────────
-function touchActivity(): void {
-  lastActivityTimestamp = Date.now();
+// ── Auth cache tracking ───────────────────────────────────────────
+function hasActiveAuthSession(): boolean {
+  return authSessionExpiresAt > Date.now();
+}
+
+function rememberAuthSession(): void {
+  authSessionExpiresAt = Date.now() + AUTH_CACHE_TTL_MS;
   credentialAutoForgetTriggered = false;
 }
 
-function isIdle(): boolean {
-  return Date.now() - lastActivityTimestamp > IDLE_TIMEOUT_MS;
+function clearAuthSession(): void {
+  authSessionExpiresAt = 0;
 }
 
-document.addEventListener("click", touchActivity);
-document.addEventListener("keydown", touchActivity);
-document.addEventListener("dragstart", touchActivity);
 
 // ── Helpers ───────────────────────────────────────────────────────
 function loadStoredGroupEmails(): string {
@@ -249,20 +249,21 @@ async function refreshSavedAdminCredentialHint(): Promise<void> {
   try {
     const hasSaved = await invoke<boolean>("has_saved_admin_credential", { adminUpn: normalized });
     adminPasswordInput.placeholder = hasSaved
-      ? "Saved password found (leave blank to reuse)"
-      : "Enter admin password (saved securely)";
+      ? "Session credential cached (leave blank to reuse)"
+      : "Enter admin password (cached for this app session)";
   } catch {
     adminPasswordInput.placeholder = "Enter admin password";
   }
 }
 
-function isIdleForCredentialForget(): boolean {
-  return Date.now() - lastActivityTimestamp > CREDENTIAL_FORGET_TIMEOUT_MS;
+function isAuthCacheExpired(): boolean {
+  return authSessionExpiresAt > 0 && !hasActiveAuthSession();
 }
 
 async function clearSavedCredential(reason: string, errorContext: string): Promise<void> {
   try {
     await invoke("clear_saved_admin_credential");
+    clearAuthSession();
     adminPasswordInput.value = "";
     await refreshSavedAdminCredentialHint();
     log(reason);
@@ -271,28 +272,15 @@ async function clearSavedCredential(reason: string, errorContext: string): Promi
   }
 }
 
-async function autoForgetCredentialIfIdle(): Promise<void> {
+async function autoExpireAuthCache(): Promise<void> {
   if (credentialAutoForgetRunning || credentialAutoForgetTriggered) return;
-  if (!isIdleForCredentialForget()) return;
-
-  const normalized = normalizeEmail(adminUpnInput.value);
-  if (!normalized) {
-    credentialAutoForgetTriggered = true;
-    return;
-  }
+  if (!isAuthCacheExpired()) return;
 
   credentialAutoForgetRunning = true;
   try {
-    const hasSaved = await invoke<boolean>("has_saved_admin_credential", { adminUpn: normalized });
-    if (!hasSaved) {
-      credentialAutoForgetTriggered = true;
-      await refreshSavedAdminCredentialHint();
-      return;
-    }
-
     await clearSavedCredential(
-      "Auto forgot saved admin password after 10 minutes of inactivity.",
-      "Cannot auto forget saved admin password"
+      "Microsoft admin auth cache expired after 10 minutes.",
+      "Cannot expire Microsoft admin auth cache"
     );
     credentialAutoForgetTriggered = true;
   } finally {
@@ -649,15 +637,13 @@ async function runAction(action: QueueName): Promise<void> {
     saveAdminUpn(adminUpn);
   }
   const adminPassword = adminPasswordInput.value;
-  if (adminPassword.trim().length > 0 && !adminUpn) {
-    log("Please enter a valid admin account before saving password.", true);
+  const hasSuppliedAdminPassword = adminPassword.trim().length > 0;
+  if (hasSuppliedAdminPassword && !adminUpn) {
+    log("Please enter a valid admin account before caching password.", true);
     return;
   }
 
-  const forceReconnect = isIdle();
-  if (forceReconnect) {
-    log("Idle for more than 5 minutes. Will re-authenticate with Microsoft.");
-  }
+  const forceReconnect = !hasActiveAuthSession();
 
   setBusy(true);
   showProgressIndeterminate(
@@ -667,14 +653,20 @@ async function runAction(action: QueueName): Promise<void> {
 
   try {
     await persistQueues();
-    log("Opening Microsoft sign-in window. Complete 2FA when prompted.");
+    if (hasActiveAuthSession()) {
+      log("Reusing Microsoft admin auth cache for this app session.");
+    } else if (hasSuppliedAdminPassword) {
+      log("Using admin credential and caching it for this app session.");
+    } else {
+      log("Opening Microsoft sign-in window. Complete 2FA when prompted.");
+    }
 
     const result = await invoke<GroupRunResult>("run_group_action", {
       action,
       emails: payload,
       groupEmails: groups,
       adminUpn: adminUpn ?? null,
-      adminPassword: adminPassword.trim().length ? adminPassword : null,
+      adminPassword: hasSuppliedAdminPassword ? adminPassword : null,
       forceReconnect
     });
 
@@ -683,12 +675,12 @@ async function runAction(action: QueueName): Promise<void> {
     if (result.stderr) log(result.stderr, true);
     renderResultDetails(result.details ?? []);
     await autoRemoveCompletedEmails(action, payload, groups, result.details ?? [], result.failedCount);
-    if (adminPassword.trim().length) {
-      log("Admin password saved securely for this Windows user.");
+    rememberAuthSession();
+    if (hasSuppliedAdminPassword) {
+      log("Admin credential cached in memory for up to 10 minutes or until the app closes.");
     }
 
     showProgressDone(result.successCount, result.failedCount);
-    touchActivity();
   } catch (error) {
     log(String(error), true);
     hideProgress();
@@ -823,10 +815,11 @@ document.addEventListener("keydown", (event) => {
 
 // ── Init ──────────────────────────────────────────────────────────
 setInterval(() => {
-  void autoForgetCredentialIfIdle();
+  void autoExpireAuthCache();
 }, 15000);
 
 window.addEventListener("beforeunload", () => {
+  clearAuthSession();
   void invoke("clear_saved_admin_credential");
 });
 

@@ -6,8 +6,10 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
+    sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
+use tauri::State;
 
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -53,12 +55,16 @@ struct ActionDetail {
     message: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone)]
 struct SavedAdminCredential {
     upn: String,
-    encrypted_password: String,
-    #[serde(default)]
+    password: String,
     saved_at_epoch_ms: u64,
+}
+
+#[derive(Default)]
+struct AdminCredentialCache {
+    credential: Mutex<Option<SavedAdminCredential>>,
 }
 
 const CREDENTIAL_TTL_MS: u64 = 10 * 60 * 1000;
@@ -95,7 +101,7 @@ fn script_path() -> PathBuf {
         .join("manage_distribution_group.ps1")
 }
 
-fn credential_file_path() -> PathBuf {
+fn legacy_credential_file_path() -> PathBuf {
     workspace_root()
         .join(".credentials")
         .join("admin_credential.json")
@@ -201,128 +207,8 @@ fn parse_result_json(stdout: &str) -> Option<(usize, usize, usize, Vec<ActionDet
     None
 }
 
-fn run_powershell_inline(script: &str, envs: &[(&str, &str)]) -> Result<String, String> {
-    let mut cmd = Command::new("powershell");
-    cmd.arg("-NoProfile")
-        .arg("-NonInteractive")
-        .arg("-ExecutionPolicy")
-        .arg("Bypass")
-        .arg("-Command")
-        .arg(script);
-
-    for (key, value) in envs {
-        cmd.env(key, value);
-    }
-
-    let output = cmd
-        .output()
-        .map_err(|err| format!("Failed to launch PowerShell helper: {err}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-
-    if !output.status.success() {
-        return Err(build_command_error(
-            "PowerShell helper command failed.",
-            &stdout,
-            &stderr,
-        ));
-    }
-
-    Ok(stdout)
-}
-
-fn protect_password(plain: &str) -> Result<String, String> {
-    if plain.trim().is_empty() {
-        return Err("Cannot encrypt an empty password.".to_string());
-    }
-
-    let script = r#"
-$ErrorActionPreference = "Stop"
-$secure = ConvertTo-SecureString -String $env:TRADE_UNION_ADMIN_PASSWORD_PLAIN -AsPlainText -Force
-$encrypted = ConvertFrom-SecureString -SecureString $secure
-Write-Output $encrypted
-"#;
-
-    let stdout = run_powershell_inline(script, &[("TRADE_UNION_ADMIN_PASSWORD_PLAIN", plain)])?;
-    let encrypted = stdout
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .map(str::trim)
-        .unwrap_or_default()
-        .to_string();
-
-    if encrypted.is_empty() {
-        return Err("Failed to encrypt admin password.".to_string());
-    }
-
-    Ok(encrypted)
-}
-
-fn unprotect_password(encrypted: &str) -> Result<String, String> {
-    let script = r#"
-$ErrorActionPreference = "Stop"
-$secure = ConvertTo-SecureString -String $env:TRADE_UNION_ADMIN_PASSWORD_ENCRYPTED
-$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-try {
-  $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
-  Write-Output $plain
-}
-finally {
-  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
-}
-"#;
-
-    let stdout = run_powershell_inline(
-        script,
-        &[("TRADE_UNION_ADMIN_PASSWORD_ENCRYPTED", encrypted)],
-    )?;
-
-    Ok(stdout.trim().to_string())
-}
-
-fn load_saved_admin_credential() -> Result<Option<SavedAdminCredential>, String> {
-    let path = credential_file_path();
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    let raw = fs::read_to_string(&path)
-        .map_err(|err| format!("Cannot read saved credential file {}: {err}", path.display()))?;
-    let parsed = serde_json::from_str::<SavedAdminCredential>(&raw)
-        .map_err(|err| format!("Invalid saved credential data {}: {err}", path.display()))?;
-
-    let now = current_epoch_ms();
-    let age = now.saturating_sub(parsed.saved_at_epoch_ms);
-    if parsed.saved_at_epoch_ms == 0 || age >= CREDENTIAL_TTL_MS {
-        let _ = clear_saved_admin_credential_file();
-        return Ok(None);
-    }
-
-    Ok(Some(parsed))
-}
-
-fn save_admin_credential(upn: &str, plain_password: &str) -> Result<(), String> {
-    let path = credential_file_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|err| format!("Cannot create credential folder {}: {err}", parent.display()))?;
-    }
-
-    let encrypted_password = protect_password(plain_password)?;
-    let payload = SavedAdminCredential {
-        upn: upn.to_string(),
-        encrypted_password,
-        saved_at_epoch_ms: current_epoch_ms(),
-    };
-    let json = serde_json::to_string(&payload)
-        .map_err(|err| format!("Cannot serialize saved credential: {err}"))?;
-    fs::write(&path, json)
-        .map_err(|err| format!("Cannot write saved credential file {}: {err}", path.display()))
-}
-
-fn clear_saved_admin_credential_file() -> Result<(), String> {
-    let path = credential_file_path();
+fn clear_legacy_saved_admin_credential_file() -> Result<(), String> {
+    let path = legacy_credential_file_path();
     if path.exists() {
         fs::remove_file(&path)
             .map_err(|err| format!("Cannot remove saved credential file {}: {err}", path.display()))?;
@@ -330,12 +216,72 @@ fn clear_saved_admin_credential_file() -> Result<(), String> {
     Ok(())
 }
 
-fn resolve_saved_admin_password(admin_upn: Option<&str>) -> Result<Option<String>, String> {
+fn load_saved_admin_credential(
+    credential_cache: &AdminCredentialCache,
+) -> Result<Option<SavedAdminCredential>, String> {
+    let mut saved = credential_cache
+        .credential
+        .lock()
+        .map_err(|_| "Cannot access admin credential cache.".to_string())?;
+
+    let Some(credential) = saved.as_ref() else {
+        return Ok(None);
+    };
+
+    let now = current_epoch_ms();
+    let age = now.saturating_sub(credential.saved_at_epoch_ms);
+    if credential.saved_at_epoch_ms == 0 || age >= CREDENTIAL_TTL_MS {
+        *saved = None;
+        return Ok(None);
+    }
+
+    Ok(Some(credential.clone()))
+}
+
+fn save_admin_credential(
+    credential_cache: &AdminCredentialCache,
+    upn: &str,
+    plain_password: &str,
+) -> Result<(), String> {
+    if plain_password.trim().is_empty() {
+        return Err("Cannot cache an empty admin password.".to_string());
+    }
+
+    let mut saved = credential_cache
+        .credential
+        .lock()
+        .map_err(|_| "Cannot access admin credential cache.".to_string())?;
+
+    *saved = Some(SavedAdminCredential {
+        upn: upn.to_string(),
+        password: plain_password.to_string(),
+        saved_at_epoch_ms: current_epoch_ms(),
+    });
+
+    Ok(())
+}
+
+fn clear_saved_admin_credential_cache(
+    credential_cache: &AdminCredentialCache,
+) -> Result<(), String> {
+    let mut saved = credential_cache
+        .credential
+        .lock()
+        .map_err(|_| "Cannot access admin credential cache.".to_string())?;
+    *saved = None;
+    let _ = clear_legacy_saved_admin_credential_file();
+    Ok(())
+}
+
+fn resolve_saved_admin_password(
+    credential_cache: &AdminCredentialCache,
+    admin_upn: Option<&str>,
+) -> Result<Option<String>, String> {
     let Some(target_upn) = admin_upn else {
         return Ok(None);
     };
 
-    let Some(saved) = load_saved_admin_credential()? else {
+    let Some(saved) = load_saved_admin_credential(credential_cache)? else {
         return Ok(None);
     };
 
@@ -343,7 +289,7 @@ fn resolve_saved_admin_password(admin_upn: Option<&str>) -> Result<Option<String
         return Ok(None);
     }
 
-    let password = unprotect_password(&saved.encrypted_password)?;
+    let password = saved.password;
     if password.is_empty() {
         return Ok(None);
     }
@@ -385,7 +331,26 @@ async fn run_group_action(
     admin_upn: Option<String>,
     admin_password: Option<String>,
     force_reconnect: Option<bool>,
+    credential_cache: State<'_, AdminCredentialCache>,
 ) -> Result<GroupRunResult, String> {
+    let cleaned_admin_upn = match admin_upn {
+        Some(value) => Some(
+            normalize_email(&value).ok_or_else(|| "Invalid admin account email.".to_string())?,
+        ),
+        None => None,
+    };
+
+    let supplied_password = admin_password.unwrap_or_default().trim().to_string();
+    let resolved_password = if supplied_password.is_empty() {
+        resolve_saved_admin_password(&credential_cache, cleaned_admin_upn.as_deref())?
+    } else {
+        let upn = cleaned_admin_upn
+            .clone()
+            .ok_or_else(|| "Enter a valid admin account before caching password.".to_string())?;
+        save_admin_credential(&credential_cache, &upn, &supplied_password)?;
+        Some(supplied_password)
+    };
+
     tauri::async_runtime::spawn_blocking(move || {
         let cleaned = sanitize_email_input(emails);
         if cleaned.is_empty() {
@@ -396,24 +361,6 @@ async fn run_group_action(
         if groups.is_empty() {
             return Err("No valid distribution groups to process.".to_string());
         }
-
-        let cleaned_admin_upn = match admin_upn {
-            Some(value) => Some(
-                normalize_email(&value).ok_or_else(|| "Invalid admin account email.".to_string())?,
-            ),
-            None => None,
-        };
-
-        let supplied_password = admin_password.unwrap_or_default().trim().to_string();
-        let resolved_password = if supplied_password.is_empty() {
-            resolve_saved_admin_password(cleaned_admin_upn.as_deref())?
-        } else {
-            let upn = cleaned_admin_upn.clone().ok_or_else(|| {
-                "Enter a valid admin account before saving password.".to_string()
-            })?;
-            save_admin_credential(&upn, &supplied_password)?;
-            Some(supplied_password)
-        };
 
         let queue_file = list_file_path(action);
         write_email_file(&queue_file, &cleaned)?;
@@ -491,12 +438,15 @@ async fn run_group_action(
 }
 
 #[tauri::command]
-fn has_saved_admin_credential(admin_upn: Option<String>) -> Result<bool, String> {
+fn has_saved_admin_credential(
+    admin_upn: Option<String>,
+    credential_cache: State<'_, AdminCredentialCache>,
+) -> Result<bool, String> {
     let Some(cleaned_upn) = admin_upn.and_then(|value| normalize_email(&value)) else {
         return Ok(false);
     };
 
-    let Some(saved) = load_saved_admin_credential()? else {
+    let Some(saved) = load_saved_admin_credential(&credential_cache)? else {
         return Ok(false);
     };
 
@@ -504,12 +454,17 @@ fn has_saved_admin_credential(admin_upn: Option<String>) -> Result<bool, String>
 }
 
 #[tauri::command]
-fn clear_saved_admin_credential() -> Result<(), String> {
-    clear_saved_admin_credential_file()
+fn clear_saved_admin_credential(
+    credential_cache: State<'_, AdminCredentialCache>,
+) -> Result<(), String> {
+    clear_saved_admin_credential_cache(&credential_cache)
 }
 
 fn main() {
+    let _ = clear_legacy_saved_admin_credential_file();
+
     tauri::Builder::default()
+        .manage(AdminCredentialCache::default())
         .invoke_handler(tauri::generate_handler![
             load_seed_emails,
             save_email_queues,

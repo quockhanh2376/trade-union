@@ -220,11 +220,3 @@ catch {
     Write-Error $_
     exit 1
 }
-finally {
-    try {
-        Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
-    }
-    catch {
-        # Ignore disconnect errors
-    }
-}
