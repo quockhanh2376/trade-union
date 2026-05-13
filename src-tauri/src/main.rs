@@ -7,6 +7,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
+use tauri::{path::BaseDirectory, AppHandle, Manager};
 
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -66,28 +67,66 @@ fn workspace_root() -> PathBuf {
         .map_or(manifest_dir.clone(), Path::to_path_buf)
 }
 
-fn list_file_path(action: GroupAction) -> PathBuf {
-    match action {
-        GroupAction::Add => workspace_root().join("emails.txt"),
-        GroupAction::Remove => workspace_root().join("removeemail.txt"),
-    }
+fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let path = app
+        .path()
+        .app_data_dir()
+        .map_err(|err| format!("Cannot resolve app data directory: {err}"))?;
+    fs::create_dir_all(&path)
+        .map_err(|err| format!("Cannot create app data directory {}: {err}", path.display()))?;
+    Ok(path)
 }
 
-fn final_file_path() -> PathBuf {
-    workspace_root().join("final.txt")
+fn list_file_path(app: &AppHandle, action: GroupAction) -> Result<PathBuf, String> {
+    let file_name = match action {
+        GroupAction::Add => "emails.txt",
+        GroupAction::Remove => "removeemail.txt",
+    };
+    Ok(app_data_dir(app)?.join(file_name))
 }
 
-fn script_path() -> PathBuf {
+fn final_file_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app_data_dir(app)?.join("final.txt"))
+}
+
+fn workspace_script_path() -> PathBuf {
     workspace_root()
         .join("src-tauri")
         .join("scripts")
         .join("manage_distribution_group.ps1")
 }
 
-fn legacy_credential_file_path() -> PathBuf {
-    workspace_root()
+fn script_path(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Ok(path) = std::env::var("TRADE_UNION_ROOT") {
+        let candidate = PathBuf::from(path)
+            .join("src-tauri")
+            .join("scripts")
+            .join("manage_distribution_group.ps1");
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    let resource_path = app
+        .path()
+        .resolve("scripts/manage_distribution_group.ps1", BaseDirectory::Resource)
+        .map_err(|err| format!("Cannot resolve bundled PowerShell script: {err}"))?;
+    if resource_path.exists() {
+        return Ok(resource_path);
+    }
+
+    let dev_path = workspace_script_path();
+    if dev_path.exists() {
+        return Ok(dev_path);
+    }
+
+    Ok(resource_path)
+}
+
+fn legacy_credential_file_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app_data_dir(app)?
         .join(".credentials")
-        .join("admin_credential.json")
+        .join("admin_credential.json"))
 }
 
 fn normalize_email(email: &str) -> Option<String> {
@@ -187,8 +226,8 @@ fn parse_result_json(stdout: &str) -> Option<(usize, usize, usize, Vec<ActionDet
     None
 }
 
-fn clear_legacy_saved_admin_credential_file() -> Result<(), String> {
-    let path = legacy_credential_file_path();
+fn clear_legacy_saved_admin_credential_file(app: &AppHandle) -> Result<(), String> {
+    let path = legacy_credential_file_path(app)?;
     if path.exists() {
         fs::remove_file(&path).map_err(|err| {
             format!(
@@ -201,15 +240,15 @@ fn clear_legacy_saved_admin_credential_file() -> Result<(), String> {
 }
 
 #[tauri::command]
-fn load_seed_emails() -> Result<SeedEmails, String> {
+fn load_seed_emails(app: AppHandle) -> Result<SeedEmails, String> {
     Ok(SeedEmails {
-        add: read_email_file(&list_file_path(GroupAction::Add))?,
-        remove: read_email_file(&list_file_path(GroupAction::Remove))?,
+        add: read_email_file(&list_file_path(&app, GroupAction::Add)?)?,
+        remove: read_email_file(&list_file_path(&app, GroupAction::Remove)?)?,
     })
 }
 
 #[tauri::command]
-fn save_email_queues(add: Vec<String>, remove: Vec<String>) -> Result<(), String> {
+fn save_email_queues(app: AppHandle, add: Vec<String>, remove: Vec<String>) -> Result<(), String> {
     let mut add_set = sanitize_email_input(add)
         .into_iter()
         .collect::<HashSet<_>>();
@@ -223,13 +262,14 @@ fn save_email_queues(add: Vec<String>, remove: Vec<String>) -> Result<(), String
     let mut add_clean = add_set.into_iter().collect::<Vec<_>>();
     add_clean.sort();
 
-    write_email_file(&list_file_path(GroupAction::Add), &add_clean)?;
-    write_email_file(&list_file_path(GroupAction::Remove), &remove_clean)?;
+    write_email_file(&list_file_path(&app, GroupAction::Add)?, &add_clean)?;
+    write_email_file(&list_file_path(&app, GroupAction::Remove)?, &remove_clean)?;
     Ok(())
 }
 
 #[tauri::command]
 async fn run_group_action(
+    app: AppHandle,
     action: GroupAction,
     emails: Vec<String>,
     group_emails: Vec<String>,
@@ -243,6 +283,10 @@ async fn run_group_action(
         None => None,
     };
 
+    let queue_file = list_file_path(&app, action)?;
+    let output_file = final_file_path(&app)?;
+    let script = script_path(&app)?;
+
     tauri::async_runtime::spawn_blocking(move || {
         let cleaned = sanitize_email_input(emails);
         if cleaned.is_empty() {
@@ -254,10 +298,8 @@ async fn run_group_action(
             return Err("No valid distribution groups to process.".to_string());
         }
 
-        let queue_file = list_file_path(action);
         write_email_file(&queue_file, &cleaned)?;
 
-        let script = script_path();
         if !script.exists() {
             return Err(format!("Missing PowerShell script: {}", script.display()));
         }
@@ -278,7 +320,7 @@ async fn run_group_action(
             .arg("-InputFile")
             .arg(queue_file.as_os_str())
             .arg("-OutputFile")
-            .arg(final_file_path().as_os_str());
+            .arg(output_file.as_os_str());
 
         if let Some(ref upn) = cleaned_admin_upn {
             cmd.arg("-AdminUpn").arg(upn);
@@ -331,7 +373,8 @@ mod tests {
 
     #[test]
     fn exchange_script_uses_modern_auth_without_password_credentials() {
-        let script = fs::read_to_string(script_path()).expect("read Exchange action script");
+        let script =
+            fs::read_to_string(workspace_script_path()).expect("read Exchange action script");
 
         assert!(
             !script.contains("Connect-ExchangeOnline -Credential"),
@@ -345,9 +388,11 @@ mod tests {
 }
 
 fn main() {
-    let _ = clear_legacy_saved_admin_credential_file();
-
     tauri::Builder::default()
+        .setup(|app| {
+            let _ = clear_legacy_saved_admin_credential_file(app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             load_seed_emails,
             save_email_queues,
