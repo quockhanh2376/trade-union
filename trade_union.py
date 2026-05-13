@@ -2,17 +2,22 @@
 
 import json
 import os
+from dataclasses import dataclass
 from typing import List, Dict, Optional
 
 
+class TradeUnionDataError(Exception):
+    """Raised when persisted trade union data cannot be loaded safely"""
+
+
+@dataclass(frozen=True)
 class TradeUnionMember:
     """Represents a trade union member"""
-    
-    def __init__(self, member_id: str, name: str, email: str, join_date: str):
-        self.member_id = member_id
-        self.name = name
-        self.email = email
-        self.join_date = join_date
+
+    member_id: str
+    name: str
+    email: str
+    join_date: str
     
     def to_dict(self) -> Dict:
         """Convert member to dictionary"""
@@ -47,20 +52,33 @@ class TradeUnion:
     
     def load_members(self):
         """Load members from file"""
-        if os.path.exists(self.data_file):
-            try:
-                with open(self.data_file, 'r') as f:
-                    data = json.load(f)
-                    self.members = [TradeUnionMember.from_dict(m) for m in data]
-            except (json.JSONDecodeError, KeyError):
-                self.members = []
-        else:
+        if not os.path.exists(self.data_file):
             self.members = []
+            return
+
+        try:
+            with open(self.data_file, 'r') as f:
+                data = json.load(f)
+            if not isinstance(data, list):
+                raise TradeUnionDataError('Member data must be a list')
+            loaded_members = [TradeUnionMember.from_dict(m) for m in data]
+        except json.JSONDecodeError as exc:
+            raise TradeUnionDataError(f'Unable to decode member data from {self.data_file}') from exc
+        except (KeyError, TypeError) as exc:
+            raise TradeUnionDataError(f'Member data in {self.data_file} has an unexpected shape') from exc
+
+        self.members = loaded_members
     
     def save_members(self):
         """Save members to file"""
-        with open(self.data_file, 'w') as f:
-            json.dump([m.to_dict() for m in self.members], f, indent=2)
+        temp_file = f"{self.data_file}.tmp"
+        try:
+            with open(temp_file, 'w') as f:
+                json.dump([m.to_dict() for m in self.members], f, indent=2)
+            os.replace(temp_file, self.data_file)
+        finally:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
     
     def add_member(self, member_id: str, name: str, email: str, join_date: str) -> bool:
         """Add a new member"""
@@ -95,7 +113,7 @@ class TradeUnion:
     
     def list_members(self) -> List[TradeUnionMember]:
         """List all members"""
-        return self.members
+        return list(self.members)
     
     def get_member_count(self) -> int:
         """Get total number of members"""
