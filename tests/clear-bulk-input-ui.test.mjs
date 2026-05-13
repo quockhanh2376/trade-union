@@ -4,6 +4,11 @@ import test from "node:test";
 
 const mainSource = await readFile(new URL("../src/main.ts", import.meta.url), "utf8");
 const styleSource = await readFile(new URL("../src/style.css", import.meta.url), "utf8");
+const tauriSource = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
+const groupScriptSource = await readFile(
+  new URL("../src-tauri/scripts/manage_distribution_group.ps1", import.meta.url),
+  "utf8"
+);
 
 test("email list has a dedicated clear button", () => {
   assert.match(mainSource, /id="clear-bulk-input"/);
@@ -36,4 +41,16 @@ test("lane run buttons use compact play run labels aligned left", () => {
   assert.match(styleSource, /\.lane-run-btn\s*{[^}]*margin: 0;/s);
   assert.doesNotMatch(mainSource, /Run Add/);
   assert.doesNotMatch(mainSource, /Run Remove/);
+});
+
+test("group input supports comma-separated groups in user-entered order", () => {
+  assert.match(
+    mainSource,
+    /placeholder="group1@company\.com, group2@company\.com"/
+  );
+  assert.match(mainSource, /groupEmailInput\.value = groups\.join\(", "\);/);
+  assert.match(mainSource, /Group order: \$\{groups\.join\(" -> "\)\}/);
+  assert.match(tauriSource, /let group_arg = groups\.join\(", "\);/);
+  assert.match(groupScriptSource, /\$Raw -split "\[,;\\s\]\+"/);
+  assert.match(groupScriptSource, /foreach \(\$group in \$groups\)/);
 });

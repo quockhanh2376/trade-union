@@ -305,7 +305,7 @@ async fn run_group_action(
         }
 
         let act = action_name(action);
-        let group_arg = groups.join(";");
+        let group_arg = groups.join(", ");
 
         let mut cmd = Command::new("powershell");
         cmd.arg("-NoProfile")
