@@ -36,8 +36,7 @@ const state: Record<QueueName, string[]> = {
 };
 
 let authSessionExpiresAt = 0;
-let credentialAutoForgetTriggered = false;
-let credentialAutoForgetRunning = false;
+let authCacheExpiryLogged = false;
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) {
@@ -58,21 +57,20 @@ app.innerHTML = `
             <label for="admin-upn">Admin:</label>
             <input id="admin-upn" type="text" placeholder="admin@aswhiteglobal.com" />
           </div>
-          <div class="admin-password-inline">
-            <label for="admin-password">Password:</label>
-            <input id="admin-password" type="password" placeholder="Enter admin password" autocomplete="off" />
-          </div>
         </div>
       </div>
     </header>
 
     <section class="composer">
       <label for="bulk-input">Email List</label>
-      <div id="bulk-input" class="bulk-editable" contenteditable="true" data-placeholder="alice@company.com&#10;bob@company.com"></div>
+      <div class="bulk-input-wrap">
+        <div id="bulk-input" class="bulk-editable" contenteditable="true" data-placeholder="alice@company.com&#10;bob@company.com"></div>
+        <button id="clear-bulk-input" class="clear-bulk-input-btn" type="button" aria-label="Clear email list" title="Clear email list">X</button>
+      </div>
       <div class="composer-actions">
-        <button id="queue-to-add" class="btn solid">Queue to Add</button>
+        <button id="queue-to-add" class="btn solid">Add</button>
         <span id="add-count" class="pill-count">0</span>
-        <button id="queue-to-remove" class="btn outline">Queue to Remove</button>
+        <button id="queue-to-remove" class="btn remove-action">Remove</button>
         <span id="remove-count" class="pill-count pill-remove">0</span>
         <button id="clear-queues" class="btn ghost">Clear</button>
         <button id="undo-swap" class="btn ghost">Undo</button>
@@ -86,14 +84,14 @@ app.innerHTML = `
     <section class="board" id="board">
       <article class="lane">
         <div class="lane-head">
-          <button id="run-add" class="btn solid lane-run-btn">▶ Run Add</button>
+          <button id="run-add" class="btn solid lane-run-btn">▶ Run</button>
         </div>
         <ul id="add-zone" data-list="add" class="drop-list"></ul>
       </article>
 
       <article class="lane remove">
         <div class="lane-head">
-          <button id="run-remove" class="btn danger lane-run-btn">▶ Run Remove</button>
+          <button id="run-remove" class="btn danger lane-run-btn">▶ Run</button>
         </div>
         <ul id="remove-zone" data-list="remove" class="drop-list"></ul>
       </article>
@@ -160,7 +158,6 @@ const runAddBtn = document.querySelector<HTMLButtonElement>("#run-add")!;
 const runRemoveBtn = document.querySelector<HTMLButtonElement>("#run-remove")!;
 const groupEmailInput = document.querySelector<HTMLInputElement>("#group-email")!;
 const adminUpnInput = document.querySelector<HTMLInputElement>("#admin-upn")!;
-const adminPasswordInput = document.querySelector<HTMLInputElement>("#admin-password")!;
 const progressSection = document.querySelector<HTMLElement>("#progress-section")!;
 const progressLabel = document.querySelector<HTMLSpanElement>("#progress-label")!;
 const progressPercent = document.querySelector<HTMLSpanElement>("#progress-percent")!;
@@ -175,12 +172,12 @@ const historyModal = document.querySelector<HTMLElement>("#history-modal")!;
 const historyBox = document.querySelector<HTMLPreElement>("#history-box")!;
 const closeLogHistoryBtn = document.querySelector<HTMLButtonElement>("#close-log-history")!;
 const clearLogHistoryBtn = document.querySelector<HTMLButtonElement>("#clear-log-history")!;
+const clearBulkInputBtn = document.querySelector<HTMLButtonElement>("#clear-bulk-input")!;
 
 const logHistory = loadLogHistory();
 
 groupEmailInput.value = loadStoredGroupEmails();
 adminUpnInput.value = loadStoredAdminUpn();
-void refreshSavedAdminCredentialHint();
 
 // ── Auth cache tracking ───────────────────────────────────────────
 function hasActiveAuthSession(): boolean {
@@ -189,11 +186,12 @@ function hasActiveAuthSession(): boolean {
 
 function rememberAuthSession(): void {
   authSessionExpiresAt = Date.now() + AUTH_CACHE_TTL_MS;
-  credentialAutoForgetTriggered = false;
+  authCacheExpiryLogged = false;
 }
 
 function clearAuthSession(): void {
   authSessionExpiresAt = 0;
+  authCacheExpiryLogged = false;
 }
 
 
@@ -239,53 +237,17 @@ function saveAdminUpn(value: string): void {
   } catch { }
 }
 
-async function refreshSavedAdminCredentialHint(): Promise<void> {
-  const normalized = normalizeEmail(adminUpnInput.value);
-  if (!normalized) {
-    adminPasswordInput.placeholder = "Enter admin password";
-    return;
-  }
-
-  try {
-    const hasSaved = await invoke<boolean>("has_saved_admin_credential", { adminUpn: normalized });
-    adminPasswordInput.placeholder = hasSaved
-      ? "Session credential cached (leave blank to reuse)"
-      : "Enter admin password (cached for this app session)";
-  } catch {
-    adminPasswordInput.placeholder = "Enter admin password";
-  }
-}
-
 function isAuthCacheExpired(): boolean {
   return authSessionExpiresAt > 0 && !hasActiveAuthSession();
 }
 
-async function clearSavedCredential(reason: string, errorContext: string): Promise<void> {
-  try {
-    await invoke("clear_saved_admin_credential");
-    clearAuthSession();
-    adminPasswordInput.value = "";
-    await refreshSavedAdminCredentialHint();
-    log(reason);
-  } catch (error) {
-    log(`${errorContext}: ${String(error)}`, true);
-  }
-}
-
-async function autoExpireAuthCache(): Promise<void> {
-  if (credentialAutoForgetRunning || credentialAutoForgetTriggered) return;
+function autoExpireAuthCache(): void {
+  if (authCacheExpiryLogged) return;
   if (!isAuthCacheExpired()) return;
 
-  credentialAutoForgetRunning = true;
-  try {
-    await clearSavedCredential(
-      "Microsoft admin auth cache expired after 10 minutes.",
-      "Cannot expire Microsoft admin auth cache"
-    );
-    credentialAutoForgetTriggered = true;
-  } finally {
-    credentialAutoForgetRunning = false;
-  }
+  authSessionExpiresAt = 0;
+  authCacheExpiryLogged = true;
+  log("Microsoft admin auth session expired after 10 minutes.");
 }
 
 function loadLogHistory(): string[] {
@@ -324,6 +286,12 @@ function clearBulkInputFromSession(): void {
   try {
     sessionStorage.removeItem(BULK_INPUT_SESSION_KEY);
   } catch { }
+}
+
+function clearBulkInput(): void {
+  bulkInput.textContent = "";
+  clearBulkInputFromSession();
+  bulkInput.focus();
 }
 
 function normalizeEmail(email: string): string | null {
@@ -636,12 +604,6 @@ async function runAction(action: QueueName): Promise<void> {
     adminUpnInput.value = adminUpn;
     saveAdminUpn(adminUpn);
   }
-  const adminPassword = adminPasswordInput.value;
-  const hasSuppliedAdminPassword = adminPassword.trim().length > 0;
-  if (hasSuppliedAdminPassword && !adminUpn) {
-    log("Please enter a valid admin account before caching password.", true);
-    return;
-  }
 
   const forceReconnect = !hasActiveAuthSession();
 
@@ -654,9 +616,7 @@ async function runAction(action: QueueName): Promise<void> {
   try {
     await persistQueues();
     if (hasActiveAuthSession()) {
-      log("Reusing Microsoft admin auth cache for this app session.");
-    } else if (hasSuppliedAdminPassword) {
-      log("Using admin credential and caching it for this app session.");
+      log("Reusing Microsoft admin auth session for this app session.");
     } else {
       log("Opening Microsoft sign-in window. Complete 2FA when prompted.");
     }
@@ -666,7 +626,6 @@ async function runAction(action: QueueName): Promise<void> {
       emails: payload,
       groupEmails: groups,
       adminUpn: adminUpn ?? null,
-      adminPassword: hasSuppliedAdminPassword ? adminPassword : null,
       forceReconnect
     });
 
@@ -676,17 +635,12 @@ async function runAction(action: QueueName): Promise<void> {
     renderResultDetails(result.details ?? []);
     await autoRemoveCompletedEmails(action, payload, groups, result.details ?? [], result.failedCount);
     rememberAuthSession();
-    if (hasSuppliedAdminPassword) {
-      log("Admin credential cached in memory for up to 10 minutes or until the app closes.");
-    }
 
     showProgressDone(result.successCount, result.failedCount);
   } catch (error) {
     log(String(error), true);
     hideProgress();
   } finally {
-    adminPasswordInput.value = "";
-    void refreshSavedAdminCredentialHint();
     setBusy(false);
     resetLayout(true);
   }
@@ -703,7 +657,7 @@ function setBusy(value: boolean): void {
     runRemoveBtn,
     groupEmailInput,
     adminUpnInput,
-    adminPasswordInput
+    clearBulkInputBtn
   ].forEach((el) => {
     el.disabled = value;
   });
@@ -777,6 +731,7 @@ runAddBtn.addEventListener("click", () => void runAction("add"));
 runRemoveBtn.addEventListener("click", () => void runAction("remove"));
 closeLogHistoryBtn.addEventListener("click", () => closeLogHistory());
 clearLogHistoryBtn.addEventListener("click", () => clearLogHistory());
+clearBulkInputBtn.addEventListener("click", () => clearBulkInput());
 
 groupEmailInput.addEventListener("change", () => {
   const groups = saveGroupEmails(groupEmailInput.value);
@@ -789,12 +744,10 @@ adminUpnInput.addEventListener("change", () => {
   const normalized = normalizeEmail(adminUpnInput.value);
   if (!normalized) {
     adminUpnInput.value = "";
-    void refreshSavedAdminCredentialHint();
     return;
   }
   adminUpnInput.value = normalized;
   saveAdminUpn(normalized);
-  void refreshSavedAdminCredentialHint();
 });
 
 bulkInput.addEventListener("input", () => {
@@ -815,12 +768,11 @@ document.addEventListener("keydown", (event) => {
 
 // ── Init ──────────────────────────────────────────────────────────
 setInterval(() => {
-  void autoExpireAuthCache();
+  autoExpireAuthCache();
 }, 15000);
 
 window.addEventListener("beforeunload", () => {
   clearAuthSession();
-  void invoke("clear_saved_admin_credential");
 });
 
 wireDropZone(addZone, "add");

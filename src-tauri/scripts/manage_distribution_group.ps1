@@ -83,42 +83,20 @@ function Read-GroupList {
 
 function Connect-ExchangeOnce {
     param(
-        [string]$AdminAccount,
-        [string]$AdminPassword
+        [string]$AdminAccount
     )
 
     if (-not [string]::IsNullOrWhiteSpace($AdminAccount) -and -not (Test-ValidEmail -Email $AdminAccount)) {
         throw "Invalid admin account email: $AdminAccount"
     }
 
-    $connected = $false
-
-    if (-not [string]::IsNullOrWhiteSpace($AdminPassword)) {
-        if ([string]::IsNullOrWhiteSpace($AdminAccount)) {
-            throw "Admin account is required when admin password is provided."
-        }
-
-        try {
-            $securePassword = ConvertTo-SecureString -String $AdminPassword -AsPlainText -Force
-            $credential = New-Object System.Management.Automation.PSCredential($AdminAccount, $securePassword)
-            Connect-ExchangeOnline -Credential $credential -ShowBanner:$false -ErrorAction Stop
-            Write-Host "Connected with saved credential for $AdminAccount" -ForegroundColor Green
-            $connected = $true
-        }
-        catch {
-            Write-Host "Saved credential login failed for $AdminAccount. Falling back to interactive sign-in..." -ForegroundColor Yellow
-        }
+    if ([string]::IsNullOrWhiteSpace($AdminAccount)) {
+        Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
+        Write-Host "Connected via Microsoft sign-in." -ForegroundColor Green
     }
-
-    if (-not $connected) {
-        if ([string]::IsNullOrWhiteSpace($AdminAccount)) {
-            Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
-            Write-Host "Connected via interactive sign-in." -ForegroundColor Green
-        }
-        else {
-            Connect-ExchangeOnline -UserPrincipalName $AdminAccount -ShowBanner:$false -ErrorAction Stop
-            Write-Host "Connected via interactive sign-in for $AdminAccount." -ForegroundColor Green
-        }
+    else {
+        Connect-ExchangeOnline -UserPrincipalName $AdminAccount -ShowBanner:$false -ErrorAction Stop
+        Write-Host "Connected via Microsoft sign-in for $AdminAccount." -ForegroundColor Green
     }
 }
 
@@ -144,8 +122,7 @@ try {
         Write-Host "No valid emails found in $InputFile"
     }
 
-    $adminPassword = $env:TRADE_UNION_ADMIN_PASSWORD
-    Connect-ExchangeOnce -AdminAccount $AdminUpn -AdminPassword $adminPassword
+    Connect-ExchangeOnce -AdminAccount $AdminUpn
 
     $successCount = 0
     $failedCount = 0
