@@ -91,8 +91,7 @@ body {
 }
 
 .group-email-inline,
-.admin-upn-inline,
-.admin-password-inline {
+.admin-upn-inline {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -100,16 +99,14 @@ body {
 }
 
 .group-email-inline label,
-.admin-upn-inline label,
-.admin-password-inline label {
+.admin-upn-inline label {
   color: var(--text-soft);
   font-size: 0.9rem;
   white-space: nowrap;
 }
 
 .group-email-inline input,
-.admin-upn-inline input,
-.admin-password-inline input {
+.admin-upn-inline input {
   width: 100%;
   min-width: 520px;
   border: 1px solid var(--line);
@@ -123,14 +120,9 @@ body {
 }
 
 .group-email-inline input:focus,
-.admin-upn-inline input:focus,
-.admin-password-inline input:focus {
+.admin-upn-inline input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--glow);
-}
-
-.admin-password-inline input {
-  min-width: 360px;
 }
 
 .composer {
@@ -144,6 +136,10 @@ body {
   font-size: 0.92rem;
 }
 
+.bulk-input-wrap {
+  position: relative;
+}
+
 .bulk-editable {
   width: 100%;
   min-height: 100px;
@@ -151,7 +147,7 @@ body {
   overflow-y: auto;
   border: 1px solid var(--line);
   border-radius: 12px;
-  padding: 10px;
+  padding: 10px 46px 10px 10px;
   font-family: "Consolas", "Cascadia Mono", monospace;
   font-size: 0.88rem;
   background: var(--bg-2);
@@ -174,6 +170,37 @@ body {
 .bulk-editable:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--glow);
+}
+
+.clear-bulk-input-btn {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+  font-family: "Consolas", "Cascadia Mono", monospace;
+  font-size: 1.35rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.clear-bulk-input-btn:hover,
+.clear-bulk-input-btn:focus-visible {
+  background: rgba(255, 93, 114, 0.14);
+  outline: none;
+}
+
+.clear-bulk-input-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .composer-actions {
@@ -279,7 +306,7 @@ body {
 .lane-head {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
 }
 
 .lane-head h2 {
@@ -288,9 +315,9 @@ body {
 }
 
 .lane-run-btn {
-  width: 220px;
-  margin: 0 auto;
-  padding: 12px 32px;
+  width: 140px;
+  margin: 0;
+  padding: 12px 24px;
   font-size: 1rem;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -546,6 +573,18 @@ body {
   background: rgba(22, 47, 47, 0.45);
 }
 
+#queue-to-remove {
+  color: #ff9baa;
+  border-color: var(--danger);
+  background: rgba(255, 93, 114, 0.12);
+}
+
+#queue-to-remove:hover:not(:disabled) {
+  color: #ffd1da;
+  border-color: var(--danger-strong);
+  background: rgba(255, 93, 114, 0.22);
+}
+
 .btn.ghost {
   color: var(--text-soft);
   border-color: var(--line);
@@ -704,14 +743,12 @@ body {
   }
 
   .group-email-inline,
-  .admin-upn-inline,
-  .admin-password-inline {
+  .admin-upn-inline {
     width: 100%;
   }
 
   .group-email-inline input,
-  .admin-upn-inline input,
-  .admin-password-inline input {
+  .admin-upn-inline input {
     flex: 1;
     min-width: 0;
   }

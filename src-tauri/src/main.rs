@@ -6,10 +6,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    sync::Mutex,
-    time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::State;
 
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -54,20 +51,6 @@ struct ActionDetail {
     #[serde(default)]
     message: String,
 }
-
-#[derive(Clone)]
-struct SavedAdminCredential {
-    upn: String,
-    password: String,
-    saved_at_epoch_ms: u64,
-}
-
-#[derive(Default)]
-struct AdminCredentialCache {
-    credential: Mutex<Option<SavedAdminCredential>>,
-}
-
-const CREDENTIAL_TTL_MS: u64 = 10 * 60 * 1000;
 
 fn workspace_root() -> PathBuf {
     if let Ok(path) = std::env::var("TRADE_UNION_ROOT") {
@@ -187,20 +170,17 @@ fn action_name(action: GroupAction) -> &'static str {
     }
 }
 
-fn current_epoch_ms() -> u64 {
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    millis.try_into().unwrap_or(u64::MAX)
-}
-
 fn parse_result_json(stdout: &str) -> Option<(usize, usize, usize, Vec<ActionDetail>)> {
     for line in stdout.lines().rev() {
         let trimmed = line.trim();
         if let Some(json_str) = trimmed.strip_prefix("RESULT_JSON:") {
             if let Ok(parsed) = serde_json::from_str::<ResultJson>(json_str) {
-                return Some((parsed.success, parsed.failed, parsed.processed, parsed.details));
+                return Some((
+                    parsed.success,
+                    parsed.failed,
+                    parsed.processed,
+                    parsed.details,
+                ));
             }
         }
     }
@@ -210,91 +190,14 @@ fn parse_result_json(stdout: &str) -> Option<(usize, usize, usize, Vec<ActionDet
 fn clear_legacy_saved_admin_credential_file() -> Result<(), String> {
     let path = legacy_credential_file_path();
     if path.exists() {
-        fs::remove_file(&path)
-            .map_err(|err| format!("Cannot remove saved credential file {}: {err}", path.display()))?;
+        fs::remove_file(&path).map_err(|err| {
+            format!(
+                "Cannot remove saved credential file {}: {err}",
+                path.display()
+            )
+        })?;
     }
     Ok(())
-}
-
-fn load_saved_admin_credential(
-    credential_cache: &AdminCredentialCache,
-) -> Result<Option<SavedAdminCredential>, String> {
-    let mut saved = credential_cache
-        .credential
-        .lock()
-        .map_err(|_| "Cannot access admin credential cache.".to_string())?;
-
-    let Some(credential) = saved.as_ref() else {
-        return Ok(None);
-    };
-
-    let now = current_epoch_ms();
-    let age = now.saturating_sub(credential.saved_at_epoch_ms);
-    if credential.saved_at_epoch_ms == 0 || age >= CREDENTIAL_TTL_MS {
-        *saved = None;
-        return Ok(None);
-    }
-
-    Ok(Some(credential.clone()))
-}
-
-fn save_admin_credential(
-    credential_cache: &AdminCredentialCache,
-    upn: &str,
-    plain_password: &str,
-) -> Result<(), String> {
-    if plain_password.trim().is_empty() {
-        return Err("Cannot cache an empty admin password.".to_string());
-    }
-
-    let mut saved = credential_cache
-        .credential
-        .lock()
-        .map_err(|_| "Cannot access admin credential cache.".to_string())?;
-
-    *saved = Some(SavedAdminCredential {
-        upn: upn.to_string(),
-        password: plain_password.to_string(),
-        saved_at_epoch_ms: current_epoch_ms(),
-    });
-
-    Ok(())
-}
-
-fn clear_saved_admin_credential_cache(
-    credential_cache: &AdminCredentialCache,
-) -> Result<(), String> {
-    let mut saved = credential_cache
-        .credential
-        .lock()
-        .map_err(|_| "Cannot access admin credential cache.".to_string())?;
-    *saved = None;
-    let _ = clear_legacy_saved_admin_credential_file();
-    Ok(())
-}
-
-fn resolve_saved_admin_password(
-    credential_cache: &AdminCredentialCache,
-    admin_upn: Option<&str>,
-) -> Result<Option<String>, String> {
-    let Some(target_upn) = admin_upn else {
-        return Ok(None);
-    };
-
-    let Some(saved) = load_saved_admin_credential(credential_cache)? else {
-        return Ok(None);
-    };
-
-    if saved.upn != target_upn {
-        return Ok(None);
-    }
-
-    let password = saved.password;
-    if password.is_empty() {
-        return Ok(None);
-    }
-
-    Ok(Some(password))
 }
 
 #[tauri::command]
@@ -307,7 +210,9 @@ fn load_seed_emails() -> Result<SeedEmails, String> {
 
 #[tauri::command]
 fn save_email_queues(add: Vec<String>, remove: Vec<String>) -> Result<(), String> {
-    let mut add_set = sanitize_email_input(add).into_iter().collect::<HashSet<_>>();
+    let mut add_set = sanitize_email_input(add)
+        .into_iter()
+        .collect::<HashSet<_>>();
     let mut remove_clean = sanitize_email_input(remove);
     remove_clean.sort();
 
@@ -329,26 +234,13 @@ async fn run_group_action(
     emails: Vec<String>,
     group_emails: Vec<String>,
     admin_upn: Option<String>,
-    admin_password: Option<String>,
     force_reconnect: Option<bool>,
-    credential_cache: State<'_, AdminCredentialCache>,
 ) -> Result<GroupRunResult, String> {
     let cleaned_admin_upn = match admin_upn {
         Some(value) => Some(
             normalize_email(&value).ok_or_else(|| "Invalid admin account email.".to_string())?,
         ),
         None => None,
-    };
-
-    let supplied_password = admin_password.unwrap_or_default().trim().to_string();
-    let resolved_password = if supplied_password.is_empty() {
-        resolve_saved_admin_password(&credential_cache, cleaned_admin_upn.as_deref())?
-    } else {
-        let upn = cleaned_admin_upn
-            .clone()
-            .ok_or_else(|| "Enter a valid admin account before caching password.".to_string())?;
-        save_admin_credential(&credential_cache, &upn, &supplied_password)?;
-        Some(supplied_password)
     };
 
     tauri::async_runtime::spawn_blocking(move || {
@@ -392,10 +284,6 @@ async fn run_group_action(
             cmd.arg("-AdminUpn").arg(upn);
         }
 
-        if let Some(ref password) = resolved_password {
-            cmd.env("TRADE_UNION_ADMIN_PASSWORD", password);
-        }
-
         if force_reconnect.unwrap_or(false) {
             cmd.arg("-ForceReconnect");
         }
@@ -416,8 +304,8 @@ async fn run_group_action(
         }
 
         let default_processed = cleaned.len() * groups.len();
-        let (success_count, failed_count, processed, details) =
-            parse_result_json(&stdout).unwrap_or((default_processed, 0, default_processed, Vec::new()));
+        let (success_count, failed_count, processed, details) = parse_result_json(&stdout)
+            .unwrap_or((default_processed, 0, default_processed, Vec::new()));
 
         Ok(GroupRunResult {
             action: act.to_ascii_lowercase(),
@@ -437,40 +325,33 @@ async fn run_group_action(
     .map_err(|err| format!("Background task failed: {err}"))?
 }
 
-#[tauri::command]
-fn has_saved_admin_credential(
-    admin_upn: Option<String>,
-    credential_cache: State<'_, AdminCredentialCache>,
-) -> Result<bool, String> {
-    let Some(cleaned_upn) = admin_upn.and_then(|value| normalize_email(&value)) else {
-        return Ok(false);
-    };
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let Some(saved) = load_saved_admin_credential(&credential_cache)? else {
-        return Ok(false);
-    };
+    #[test]
+    fn exchange_script_uses_modern_auth_without_password_credentials() {
+        let script = fs::read_to_string(script_path()).expect("read Exchange action script");
 
-    Ok(saved.upn == cleaned_upn)
-}
-
-#[tauri::command]
-fn clear_saved_admin_credential(
-    credential_cache: State<'_, AdminCredentialCache>,
-) -> Result<(), String> {
-    clear_saved_admin_credential_cache(&credential_cache)
+        assert!(
+            !script.contains("Connect-ExchangeOnline -Credential"),
+            "Exchange Online auth must not use password credential auth because it breaks MFA accounts"
+        );
+        assert!(
+            script.contains("Connect-ExchangeOnline -UserPrincipalName $AdminAccount"),
+            "admin UPN should be passed into the modern Exchange Online sign-in prompt"
+        );
+    }
 }
 
 fn main() {
     let _ = clear_legacy_saved_admin_credential_file();
 
     tauri::Builder::default()
-        .manage(AdminCredentialCache::default())
         .invoke_handler(tauri::generate_handler![
             load_seed_emails,
             save_email_queues,
-            run_group_action,
-            has_saved_admin_credential,
-            clear_saved_admin_credential
+            run_group_action
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
