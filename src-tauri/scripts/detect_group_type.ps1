@@ -23,10 +23,25 @@ function Resolve-GroupType {
     }
 }
 
+function Get-ExchangeConnectParameters {
+    $params = @{
+        ShowBanner = $false
+        ErrorAction = "Stop"
+    }
+
+    $connectCommand = Get-Command Connect-ExchangeOnline -ErrorAction Stop
+    if ($connectCommand.Parameters.ContainsKey("DisableWAM")) {
+        $params.DisableWAM = $true
+    }
+
+    return $params
+}
+
 try {
     Ensure-ExchangeModule
     Import-Module ExchangeOnlineManagement -ErrorAction Stop
-    Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
+    $connectParams = Get-ExchangeConnectParameters
+    Connect-ExchangeOnline @connectParams
 
     $recipient = Get-Recipient -Identity $GroupEmail -ErrorAction Stop
     $rawType = [string]$recipient.RecipientTypeDetails

@@ -38,6 +38,25 @@ function Is-AlreadyConnected {
     }
 }
 
+function Get-ExchangeConnectParameters {
+    $params = @{
+        ShowBanner = $false
+        ErrorAction = "Stop"
+    }
+
+    $connectCommand = Get-Command Connect-ExchangeOnline -ErrorAction Stop
+    if ($connectCommand.Parameters.ContainsKey("DisableWAM")) {
+        $params.DisableWAM = $true
+    }
+
+    return $params
+}
+
+function Connect-ExchangeWithHiddenConsoleAuth {
+    $connectParams = Get-ExchangeConnectParameters
+    Connect-ExchangeOnline @connectParams
+}
+
 try {
     Ensure-ExchangeModule
     Import-Module ExchangeOnlineManagement -ErrorAction Stop
@@ -47,18 +66,18 @@ try {
         try {
             Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
         } catch {}
-        Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
+        Connect-ExchangeWithHiddenConsoleAuth
     }
     elseif ($IsFirst) {
         if (-not (Is-AlreadyConnected)) {
-            Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
+            Connect-ExchangeWithHiddenConsoleAuth
         }
     }
     # For subsequent calls (not first, not force), try to use existing session
     # If no session exists, connect
     else {
         if (-not (Is-AlreadyConnected)) {
-            Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
+            Connect-ExchangeWithHiddenConsoleAuth
         }
     }
 

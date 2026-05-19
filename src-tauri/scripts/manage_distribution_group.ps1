@@ -81,6 +81,28 @@ function Read-GroupList {
     return $items.ToArray()
 }
 
+function Get-ExchangeConnectParameters {
+    param(
+        [string]$AdminAccount
+    )
+
+    $params = @{
+        ShowBanner = $false
+        ErrorAction = "Stop"
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($AdminAccount)) {
+        $params.UserPrincipalName = $AdminAccount
+    }
+
+    $connectCommand = Get-Command Connect-ExchangeOnline -ErrorAction Stop
+    if ($connectCommand.Parameters.ContainsKey("DisableWAM")) {
+        $params.DisableWAM = $true
+    }
+
+    return $params
+}
+
 function Connect-ExchangeOnce {
     param(
         [string]$AdminAccount
@@ -90,12 +112,13 @@ function Connect-ExchangeOnce {
         throw "Invalid admin account email: $AdminAccount"
     }
 
+    $connectParams = Get-ExchangeConnectParameters -AdminAccount $AdminAccount
+    Connect-ExchangeOnline @connectParams
+
     if ([string]::IsNullOrWhiteSpace($AdminAccount)) {
-        Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
         Write-Host "Connected via Microsoft sign-in." -ForegroundColor Green
     }
     else {
-        Connect-ExchangeOnline -UserPrincipalName $AdminAccount -ShowBanner:$false -ErrorAction Stop
         Write-Host "Connected via Microsoft sign-in for $AdminAccount." -ForegroundColor Green
     }
 }

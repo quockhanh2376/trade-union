@@ -391,19 +391,55 @@ async fn run_group_action(
 mod tests {
     use super::*;
 
+    fn read_workspace_script(file_name: &str) -> String {
+        let path = workspace_root()
+            .join("src-tauri")
+            .join("scripts")
+            .join(file_name);
+        fs::read_to_string(&path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
+    }
+
     #[test]
     fn exchange_script_uses_modern_auth_without_password_credentials() {
-        let script =
-            fs::read_to_string(workspace_script_path()).expect("read Exchange action script");
+        let script = read_workspace_script("manage_distribution_group.ps1");
 
         assert!(
             !script.contains("Connect-ExchangeOnline -Credential"),
             "Exchange Online auth must not use password credential auth because it breaks MFA accounts"
         );
         assert!(
-            script.contains("Connect-ExchangeOnline -UserPrincipalName $AdminAccount"),
+            script.contains("UserPrincipalName = $AdminAccount")
+                || script.contains("params.UserPrincipalName = $AdminAccount"),
             "admin UPN should be passed into the modern Exchange Online sign-in prompt"
         );
+    }
+
+    #[test]
+    fn exchange_scripts_disable_wam_when_hidden_powershell_can_block_auth_ui() {
+        for file_name in [
+            "manage_distribution_group.ps1",
+            "detect_group_type.ps1",
+            "single_email_action.ps1",
+            "finalize_group.ps1",
+        ] {
+            let script = read_workspace_script(file_name);
+            if !script.contains("Connect-ExchangeOnline") {
+                continue;
+            }
+
+            assert!(
+                script.contains("Parameters.ContainsKey(\"DisableWAM\")"),
+                "{file_name} should guard DisableWAM for older ExchangeOnlineManagement versions"
+            );
+            assert!(
+                script.contains("DisableWAM"),
+                "{file_name} should disable WAM so Microsoft sign-in can open while PowerShell is hidden"
+            );
+            assert!(
+                !script.contains("Connect-ExchangeOnline -ShowBanner:$false"),
+                "{file_name} should connect via splatted parameters so DisableWAM is applied consistently"
+            );
+        }
     }
 }
 
