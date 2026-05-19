@@ -5,7 +5,7 @@ use std::{
     collections::HashSet,
     fs,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
 };
 use tauri::{path::BaseDirectory, AppHandle, Manager};
 
@@ -209,6 +209,22 @@ fn action_name(action: GroupAction) -> &'static str {
     }
 }
 
+#[cfg(windows)]
+fn hidden_powershell_command() -> Command {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    let mut cmd = Command::new("powershell.exe");
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
+#[cfg(not(windows))]
+fn hidden_powershell_command() -> Command {
+    Command::new("powershell")
+}
+
 fn parse_result_json(stdout: &str) -> Option<(usize, usize, usize, Vec<ActionDetail>)> {
     for line in stdout.lines().rev() {
         let trimmed = line.trim();
@@ -307,8 +323,9 @@ async fn run_group_action(
         let act = action_name(action);
         let group_arg = groups.join(";");
 
-        let mut cmd = Command::new("powershell");
-        cmd.arg("-NoProfile")
+        let mut cmd = hidden_powershell_command();
+        cmd.arg("-NoLogo")
+            .arg("-NoProfile")
             .arg("-ExecutionPolicy")
             .arg("Bypass")
             .arg("-File")
@@ -320,7 +337,10 @@ async fn run_group_action(
             .arg("-InputFile")
             .arg(queue_file.as_os_str())
             .arg("-OutputFile")
-            .arg(output_file.as_os_str());
+            .arg(output_file.as_os_str())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
         if let Some(ref upn) = cleaned_admin_upn {
             cmd.arg("-AdminUpn").arg(upn);
