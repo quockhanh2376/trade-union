@@ -36,6 +36,13 @@
     "windows": {
       "webviewInstallMode": {
         "type": "offlineInstaller"
+      },
+      "wix": {
+        "upgradeCode": "142d4337-ebfa-5a2e-a5f7-33592dce26d6"
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "installerHooks": "installer-hooks/clean-install.nsh"
       }
     }
   }
