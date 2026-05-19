@@ -37,3 +37,13 @@ test("lane run buttons use compact play run labels aligned left", () => {
   assert.doesNotMatch(mainSource, /Run Add/);
   assert.doesNotMatch(mainSource, /Run Remove/);
 });
+
+test("lane run buttons are disabled when their queue is empty", () => {
+  assert.match(mainSource, /let isBusy = false;/);
+  assert.match(mainSource, /function updateRunButtonStates\(busy = isBusy\): void/);
+  assert.match(mainSource, /runAddBtn\.disabled = busy \|\| state\.add\.length === 0;/);
+  assert.match(mainSource, /runRemoveBtn\.disabled = busy \|\| state\.remove\.length === 0;/);
+  assert.match(mainSource, /function render\(\): void\s*{[^}]*updateRunButtonStates\(\);/s);
+  assert.match(mainSource, /function setBusy\(value: boolean\): void\s*{[\s\S]*?isBusy = value;/);
+  assert.match(mainSource, /function setBusy\(value: boolean\): void\s*{[\s\S]*?updateRunButtonStates\(\);/);
+});
