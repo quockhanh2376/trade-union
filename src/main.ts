@@ -37,6 +37,7 @@ const state: Record<QueueName, string[]> = {
 
 let authSessionExpiresAt = 0;
 let authCacheExpiryLogged = false;
+let isBusy = false;
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) {
@@ -359,6 +360,11 @@ function updateCounts(): void {
   removeCount.textContent = String(state.remove.length);
 }
 
+function updateRunButtonStates(busy = isBusy): void {
+  runAddBtn.disabled = busy || state.add.length === 0;
+  runRemoveBtn.disabled = busy || state.remove.length === 0;
+}
+
 function renderZone(target: QueueName): void {
   const zone = target === "add" ? addZone : removeZone;
   const items = state[target]
@@ -378,6 +384,7 @@ function render(): void {
   renderZone("add");
   renderZone("remove");
   updateCounts();
+  updateRunButtonStates();
   bindDynamicEvents();
 }
 
@@ -647,20 +654,20 @@ async function runAction(action: QueueName): Promise<void> {
 }
 
 function setBusy(value: boolean): void {
+  isBusy = value;
   [
     queueToAddBtn,
     queueToRemoveBtn,
     clearQueuesBtn,
     undoSwapBtn,
     viewLogHistoryBtn,
-    runAddBtn,
-    runRemoveBtn,
     groupEmailInput,
     adminUpnInput,
     clearBulkInputBtn
   ].forEach((el) => {
     el.disabled = value;
   });
+  updateRunButtonStates();
 }
 function bindDynamicEvents(): void {
   document.querySelectorAll<HTMLLIElement>(".email-item").forEach((item) => {
