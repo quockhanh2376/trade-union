@@ -25,12 +25,27 @@ function Is-AlreadyConnected {
     }
 }
 
+function Get-ExchangeConnectParameters {
+    $params = @{
+        ShowBanner = $false
+        ErrorAction = "Stop"
+    }
+
+    $connectCommand = Get-Command Connect-ExchangeOnline -ErrorAction Stop
+    if ($connectCommand.Parameters.ContainsKey("DisableWAM")) {
+        $params.DisableWAM = $true
+    }
+
+    return $params
+}
+
 try {
     Ensure-ExchangeModule
     Import-Module ExchangeOnlineManagement -ErrorAction Stop
 
     if (-not (Is-AlreadyConnected)) {
-        Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
+        $connectParams = Get-ExchangeConnectParameters
+        Connect-ExchangeOnline @connectParams
     }
 
     $members = Get-DistributionGroupMember -Identity $DistGroup -ErrorAction Stop
