@@ -1,0 +1,9 @@
+export const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const DEFAULT_GROUP_EMAIL = "ASWVN_TradeUnion@aswhiteglobal.com";
+export const GROUP_EMAILS_STORAGE_KEY = "trade-union.group-emails";
+export const LEGACY_GROUP_EMAIL_STORAGE_KEY = "trade-union.group-email";
+export const ADMIN_UPN_STORAGE_KEY = "trade-union.admin-upn";
+export const LOG_HISTORY_STORAGE_KEY = "trade-union.log-history";
+export const BULK_INPUT_SESSION_KEY = "trade-union.bulk-input";
+export const LOG_HISTORY_MAX_LINES = 5000;
+export const AUTH_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
