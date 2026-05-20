@@ -1,7 +1,7 @@
 """Command Line Interface for Trade Union Management"""
 
 import sys
-from trade_union import TradeUnion
+from trade_union import TradeUnion, TradeUnionValueError
 
 
 def print_menu():
@@ -22,11 +22,14 @@ def add_member_interactive(union: TradeUnion):
     name = input("Name: ").strip()
     email = input("Email: ").strip()
     join_date = input("Join Date (YYYY-MM-DD): ").strip()
-    
-    if union.add_member(member_id, name, email, join_date):
-        print(f"✓ Member '{name}' added successfully!")
-    else:
-        print(f"✗ Member with ID '{member_id}' already exists!")
+
+    try:
+        if union.add_member(member_id, name, email, join_date):
+            print(f"✓ Member '{name}' added successfully!")
+        else:
+            print(f"✗ Member with ID '{member_id}' already exists!")
+    except TradeUnionValueError as exc:
+        print(f"✗ Invalid input: {exc}")
 
 
 def remove_member_interactive(union: TradeUnion):

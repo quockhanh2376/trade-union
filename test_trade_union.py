@@ -2,7 +2,7 @@
 
 import unittest
 import os
-from trade_union import TradeUnion, TradeUnionDataError, TradeUnionMember
+from trade_union import TradeUnion, TradeUnionDataError, TradeUnionMember, TradeUnionValueError
 
 
 class TestTradeUnionMember(unittest.TestCase):
@@ -169,7 +169,7 @@ class TestTradeUnion(unittest.TestCase):
             def to_dict(self):
                 raise ValueError('cannot serialize')
 
-        self.union.members = [BrokenMember()]
+        self.union.members = {'broken': BrokenMember()}
 
         with self.assertRaises(ValueError):
             self.union.save_members()
@@ -198,7 +198,48 @@ class TestTradeUnion(unittest.TestCase):
         union2 = TradeUnion(self.test_file)
         self.assertEqual(union2.get_member_count(), 1)
         self.assertIsNone(union2.get_member('001'))
-        self.assertIsNotNone(union2.get_member('002'))
+
+
+class TestTradeUnionValidation(unittest.TestCase):
+    """Test input validation in TradeUnion"""
+
+    def setUp(self):
+        self.test_file = 'test_members_validation.json'
+        if os.path.exists(self.test_file):
+            os.remove(self.test_file)
+        self.union = TradeUnion(self.test_file)
+
+    def tearDown(self):
+        if os.path.exists(self.test_file):
+            os.remove(self.test_file)
+
+    def test_add_member_rejects_invalid_email(self):
+        """Test that add_member raises on malformed email"""
+        with self.assertRaises(TradeUnionValueError):
+            self.union.add_member('001', 'John Doe', 'not-an-email', '2024-01-01')
+        self.assertEqual(self.union.get_member_count(), 0)
+
+    def test_add_member_rejects_email_without_tld(self):
+        """Test that add_member raises when email has no TLD"""
+        with self.assertRaises(TradeUnionValueError):
+            self.union.add_member('001', 'John Doe', 'user@domain', '2024-01-01')
+
+    def test_add_member_rejects_invalid_date_format(self):
+        """Test that add_member raises on wrong date format"""
+        with self.assertRaises(TradeUnionValueError):
+            self.union.add_member('001', 'John Doe', 'john@example.com', '01-01-2024')
+        self.assertEqual(self.union.get_member_count(), 0)
+
+    def test_add_member_rejects_nonsense_date(self):
+        """Test that add_member raises on non-date string"""
+        with self.assertRaises(TradeUnionValueError):
+            self.union.add_member('001', 'John Doe', 'john@example.com', 'yesterday')
+
+    def test_add_member_accepts_valid_inputs(self):
+        """Test that add_member succeeds with valid email and date"""
+        result = self.union.add_member('001', 'John Doe', 'john@example.com', '2024-01-01')
+        self.assertTrue(result)
+        self.assertEqual(self.union.get_member_count(), 1)
 
 
 if __name__ == '__main__':

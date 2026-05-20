@@ -2,12 +2,21 @@
 
 import json
 import os
+import re
 from dataclasses import dataclass
-from typing import List, Dict, Optional
+from datetime import datetime
+from typing import Dict, List, Optional
+
+_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+_DATE_FORMAT = '%Y-%m-%d'
 
 
 class TradeUnionDataError(Exception):
     """Raised when persisted trade union data cannot be loaded safely"""
+
+
+class TradeUnionValueError(ValueError):
+    """Raised when input data fails validation"""
 
 
 @dataclass(frozen=True)
@@ -47,13 +56,13 @@ class TradeUnion:
     
     def __init__(self, data_file: str = 'members.json'):
         self.data_file = data_file
-        self.members: List[TradeUnionMember] = []
+        self.members: Dict[str, TradeUnionMember] = {}
         self.load_members()
     
     def load_members(self):
         """Load members from file"""
         if not os.path.exists(self.data_file):
-            self.members = []
+            self.members = {}
             return
 
         try:
@@ -61,7 +70,7 @@ class TradeUnion:
                 data = json.load(f)
             if not isinstance(data, list):
                 raise TradeUnionDataError('Member data must be a list')
-            loaded_members = [TradeUnionMember.from_dict(m) for m in data]
+            loaded_members = {m['member_id']: TradeUnionMember.from_dict(m) for m in data}
         except json.JSONDecodeError as exc:
             raise TradeUnionDataError(f'Unable to decode member data from {self.data_file}') from exc
         except (KeyError, TypeError) as exc:
@@ -74,7 +83,7 @@ class TradeUnion:
         temp_file = f"{self.data_file}.tmp"
         try:
             with open(temp_file, 'w') as f:
-                json.dump([m.to_dict() for m in self.members], f, indent=2)
+                json.dump([m.to_dict() for m in self.members.values()], f, indent=2)
             os.replace(temp_file, self.data_file)
         finally:
             if os.path.exists(temp_file):
@@ -82,38 +91,36 @@ class TradeUnion:
     
     def add_member(self, member_id: str, name: str, email: str, join_date: str) -> bool:
         """Add a new member"""
-        if self.get_member(member_id):
+        if not _EMAIL_RE.match(email):
+            raise TradeUnionValueError(f'Invalid email address: {email}')
+        try:
+            datetime.strptime(join_date, _DATE_FORMAT)
+        except ValueError:
+            raise TradeUnionValueError(f'Invalid join_date, expected YYYY-MM-DD: {join_date}')
+
+        if member_id in self.members:
             return False
-        
+
         member = TradeUnionMember(member_id, name, email, join_date)
-        self.members.append(member)
+        self.members[member_id] = member
         self.save_members()
         return True
     
     def remove_member(self, member_id: str) -> bool:
         """Remove a member by ID"""
-        member_to_remove = None
-        for member in self.members:
-            if member.member_id == member_id:
-                member_to_remove = member
-                break
-        
-        if member_to_remove:
-            self.members.remove(member_to_remove)
-            self.save_members()
-            return True
-        return False
+        if member_id not in self.members:
+            return False
+        del self.members[member_id]
+        self.save_members()
+        return True
     
     def get_member(self, member_id: str) -> Optional[TradeUnionMember]:
         """Get a member by ID"""
-        for member in self.members:
-            if member.member_id == member_id:
-                return member
-        return None
+        return self.members.get(member_id)
     
     def list_members(self) -> List[TradeUnionMember]:
         """List all members"""
-        return list(self.members)
+        return list(self.members.values())
     
     def get_member_count(self) -> int:
         """Get total number of members"""

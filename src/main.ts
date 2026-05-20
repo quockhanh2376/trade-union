@@ -1,43 +1,26 @@
 import { invoke } from "@tauri-apps/api/core";
 import "./style.css";
-
-type QueueName = "add" | "remove";
-
-interface GroupRunResult {
-  action: string;
-  processed: number;
-  successCount: number;
-  failedCount: number;
-  details: ActionDetail[];
-  stdout: string;
-  stderr: string;
-}
-
-interface ActionDetail {
-  email: string;
-  group: string;
-  status: string;
-  message?: string;
-}
-
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const DEFAULT_GROUP_EMAIL = "ASWVN_TradeUnion@aswhiteglobal.com";
-const GROUP_EMAILS_STORAGE_KEY = "trade-union.group-emails";
-const LEGACY_GROUP_EMAIL_STORAGE_KEY = "trade-union.group-email";
-const ADMIN_UPN_STORAGE_KEY = "trade-union.admin-upn";
-const LOG_HISTORY_STORAGE_KEY = "trade-union.log-history";
-const BULK_INPUT_SESSION_KEY = "trade-union.bulk-input";
-const LOG_HISTORY_MAX_LINES = 5000;
-const AUTH_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-
-const state: Record<QueueName, string[]> = {
-  add: [],
-  remove: []
-};
-
-let authSessionExpiresAt = 0;
-let authCacheExpiryLogged = false;
-let isBusy = false;
+import type { QueueName, GroupRunResult, ActionDetail } from "./types";
+import { LOG_HISTORY_MAX_LINES } from "./constants";
+import { normalizeEmail, parseEmails, escapeHtml } from "./email";
+import {
+  loadStoredGroupEmails,
+  saveGroupEmails,
+  loadStoredAdminUpn,
+  saveAdminUpn,
+  loadLogHistory,
+  saveLogHistory,
+  loadBulkInputFromSession,
+  saveBulkInputToSession,
+  clearBulkInputFromSession,
+} from "./storage";
+import {
+  hasActiveAuthSession,
+  rememberAuthSession,
+  clearAuthSession,
+  autoExpireAuthCache,
+} from "./auth";
+import { state, ensureInQueue, removeFromQueue, moveEmail } from "./queue";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) {
@@ -175,149 +158,20 @@ const closeLogHistoryBtn = document.querySelector<HTMLButtonElement>("#close-log
 const clearLogHistoryBtn = document.querySelector<HTMLButtonElement>("#clear-log-history")!;
 const clearBulkInputBtn = document.querySelector<HTMLButtonElement>("#clear-bulk-input")!;
 
+let isBusy = false;
+
 const logHistory = loadLogHistory();
 
 groupEmailInput.value = loadStoredGroupEmails();
 adminUpnInput.value = loadStoredAdminUpn();
 
-// ── Auth cache tracking ───────────────────────────────────────────
-function hasActiveAuthSession(): boolean {
-  return authSessionExpiresAt > Date.now();
-}
+// ── UI helpers ────────────────────────────────────────────────────────────────
 
-function rememberAuthSession(): void {
-  authSessionExpiresAt = Date.now() + AUTH_CACHE_TTL_MS;
-  authCacheExpiryLogged = false;
-}
-
-function clearAuthSession(): void {
-  authSessionExpiresAt = 0;
-  authCacheExpiryLogged = false;
-}
-
-
-// ── Helpers ───────────────────────────────────────────────────────
-function loadStoredGroupEmails(): string {
-  try {
-    const saved =
-      localStorage.getItem(GROUP_EMAILS_STORAGE_KEY) ??
-      localStorage.getItem(LEGACY_GROUP_EMAIL_STORAGE_KEY);
-    const parsed = parseEmails(saved ?? "");
-    if (!parsed.length) return DEFAULT_GROUP_EMAIL;
-    return parsed.join(", ");
-  } catch {
-    return DEFAULT_GROUP_EMAIL;
-  }
-}
-
-function saveGroupEmails(value: string): string[] {
-  const parsed = parseEmails(value);
-  if (!parsed.length) return [];
-
-  const serialized = parsed.join(", ");
-  try {
-    localStorage.setItem(GROUP_EMAILS_STORAGE_KEY, serialized);
-    localStorage.setItem(LEGACY_GROUP_EMAIL_STORAGE_KEY, parsed[0]);
-  } catch { }
-  return parsed;
-}
-
-function loadStoredAdminUpn(): string {
-  try {
-    const saved = localStorage.getItem(ADMIN_UPN_STORAGE_KEY);
-    if (!saved) return "";
-    return normalizeEmail(saved) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function saveAdminUpn(value: string): void {
-  try {
-    localStorage.setItem(ADMIN_UPN_STORAGE_KEY, value);
-  } catch { }
-}
-
-function isAuthCacheExpired(): boolean {
-  return authSessionExpiresAt > 0 && !hasActiveAuthSession();
-}
-
-function autoExpireAuthCache(): void {
-  if (authCacheExpiryLogged) return;
-  if (!isAuthCacheExpired()) return;
-
-  authSessionExpiresAt = 0;
-  authCacheExpiryLogged = true;
-  log("Microsoft admin auth session expired after 10 minutes.");
-}
-
-function loadLogHistory(): string[] {
-  try {
-    const raw = localStorage.getItem(LOG_HISTORY_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((item): item is string => typeof item === "string").slice(0, LOG_HISTORY_MAX_LINES);
-  } catch {
-    return [];
-  }
-}
-
-function saveLogHistory(): void {
-  try {
-    localStorage.setItem(LOG_HISTORY_STORAGE_KEY, JSON.stringify(logHistory.slice(0, LOG_HISTORY_MAX_LINES)));
-  } catch { }
-}
-
-function loadBulkInputFromSession(): string {
-  try {
-    return sessionStorage.getItem(BULK_INPUT_SESSION_KEY) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function saveBulkInputToSession(): void {
-  try {
-    sessionStorage.setItem(BULK_INPUT_SESSION_KEY, bulkInput.innerText);
-  } catch { }
-}
-
-function clearBulkInputFromSession(): void {
-  try {
-    sessionStorage.removeItem(BULK_INPUT_SESSION_KEY);
-  } catch { }
-}
 
 function clearBulkInput(): void {
   bulkInput.textContent = "";
   clearBulkInputFromSession();
   bulkInput.focus();
-}
-
-function normalizeEmail(email: string): string | null {
-  const value = email.trim().toLowerCase();
-  if (!value || !EMAIL_REGEX.test(value)) return null;
-  return value;
-}
-
-function parseEmails(text: string): string[] {
-  const unique = new Set<string>();
-  text
-    .split(/[\s,;]+/g)
-    .map((token) => normalizeEmail(token))
-    .filter((value): value is string => value !== null)
-    .forEach((email) => unique.add(email));
-  return [...unique];
-}
-
-function escapeHtml(raw: string): string {
-  return raw
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }
 
 function renderLogHistory(): void {
@@ -339,7 +193,7 @@ function closeLogHistory(): void {
 
 function clearLogHistory(): void {
   logHistory.length = 0;
-  saveLogHistory();
+  saveLogHistory(logHistory);
   renderLogHistory();
 }
 
@@ -351,7 +205,7 @@ function log(message: string, error = false): void {
   if (logHistory.length > LOG_HISTORY_MAX_LINES) {
     logHistory.length = LOG_HISTORY_MAX_LINES;
   }
-  saveLogHistory();
+  saveLogHistory(logHistory);
   if (error) logBox.classList.add("error");
 }
 
@@ -524,28 +378,6 @@ function resetLayout(closeActivityLog: boolean): void {
 }
 
 // ── Queue operations ──────────────────────────────────────────────
-function ensureInQueue(target: QueueName, emails: string[]): void {
-  const opposite: QueueName = target === "add" ? "remove" : "add";
-  const nextTarget = new Set(state[target]);
-  const nextOpposite = new Set(state[opposite]);
-  emails.forEach((email) => {
-    nextOpposite.delete(email);
-    nextTarget.add(email);
-  });
-  state[target] = [...nextTarget].sort();
-  state[opposite] = [...nextOpposite].sort();
-}
-
-function removeFromQueue(target: QueueName, email: string): void {
-  state[target] = state[target].filter((item) => item !== email);
-}
-
-function moveEmail(email: string, source: QueueName, target: QueueName): void {
-  if (source === target) return;
-  removeFromQueue(source, email);
-  ensureInQueue(target, [email]);
-}
-
 async function persistQueues(): Promise<void> {
   await invoke("save_email_queues", { add: state.add, remove: state.remove });
 }
@@ -560,7 +392,7 @@ async function queueFromInput(target: QueueName): Promise<void> {
   render();
   await persistQueues();
   log(`Queued ${emails.length} email(s) into ${target.toUpperCase()}.`);
-  saveBulkInputToSession();
+  saveBulkInputToSession(bulkInput.innerText);
 }
 
 async function clearQueues(): Promise<void> {
@@ -758,7 +590,7 @@ adminUpnInput.addEventListener("change", () => {
 });
 
 bulkInput.addEventListener("input", () => {
-  saveBulkInputToSession();
+  saveBulkInputToSession(bulkInput.innerText);
 });
 
 historyModal.addEventListener("click", (event) => {
@@ -775,7 +607,7 @@ document.addEventListener("keydown", (event) => {
 
 // ── Init ──────────────────────────────────────────────────────────
 setInterval(() => {
-  autoExpireAuthCache();
+  autoExpireAuthCache(log);
 }, 15000);
 
 window.addEventListener("beforeunload", () => {

@@ -6,6 +6,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::OnceLock,
 };
 use tauri::{path::BaseDirectory, AppHandle, Manager};
 
@@ -215,7 +216,22 @@ fn hidden_powershell_command() -> Command {
 
     const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-    let mut cmd = Command::new("powershell.exe");
+    // Prefer PowerShell 7 (pwsh.exe) when available — better ExchangeOnlineManagement support
+    static PWSH_AVAILABLE: OnceLock<bool> = OnceLock::new();
+    let use_pwsh = *PWSH_AVAILABLE.get_or_init(|| {
+        Command::new("pwsh.exe")
+            .args(["-NoProfile", "-Command", "exit 0"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    });
+
+    let exe = if use_pwsh { "pwsh.exe" } else { "powershell.exe" };
+    let mut cmd = Command::new(exe);
     cmd.creation_flags(CREATE_NO_WINDOW);
     cmd
 }
