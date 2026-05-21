@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import "./style.css";
 import type { QueueName, GroupRunResult, ActionDetail } from "./types";
 import { LOG_HISTORY_MAX_LINES } from "./constants";
-import { normalizeEmail, parseEmails, escapeHtml } from "./email";
+import { normalizeEmail, parseEmails, escapeHtml, sanitizeEmailInput } from "./email";
 import {
   loadStoredGroupEmails,
   saveGroupEmails,
@@ -389,6 +389,8 @@ async function queueFromInput(target: QueueName): Promise<void> {
     return;
   }
   ensureInQueue(target, emails);
+  // Auto-sort, deduplicate, and remove blank entries from the input area
+  bulkInput.textContent = sanitizeEmailInput(bulkInput.innerText);
   render();
   await persistQueues();
   log(`Queued ${emails.length} email(s) into ${target.toUpperCase()}.`);
