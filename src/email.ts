@@ -16,6 +16,21 @@ export function parseEmails(text: string): string[] {
   return [...unique];
 }
 
+/**
+ * Returns a cleaned, sorted, deduplicated, newline-separated email string
+ * suitable for rendering back into the bulk-input area.
+ */
+export function sanitizeEmailInput(text: string): string {
+  const unique = new Set<string>();
+  text
+    .split(/[\s,;]+/g)
+    .map((token) => normalizeEmail(token))
+    .filter((value): value is string => value !== null)
+    .sort()
+    .forEach((email) => unique.add(email));
+  return [...unique].join("\n");
+}
+
 export function escapeHtml(raw: string): string {
   return raw
     .replace(/&/g, "&amp;")
