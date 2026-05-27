@@ -240,6 +240,24 @@ fn action_name(action: GroupAction) -> &'static str {
 }
 
 #[cfg(windows)]
+fn powershell_compatible_path(path: &Path) -> PathBuf {
+    let value = path.as_os_str().to_string_lossy();
+    if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = value.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest);
+    }
+
+    path.to_path_buf()
+}
+
+#[cfg(not(windows))]
+fn powershell_compatible_path(path: &Path) -> PathBuf {
+    path.to_path_buf()
+}
+
+#[cfg(windows)]
 fn hidden_powershell_command() -> Command {
     use std::os::windows::process::CommandExt;
 
@@ -348,6 +366,10 @@ async fn run_group_action(
     let output_file = final_file_path(&app)?;
     let script = script_path(&app)?;
     let bundled_modules = bundled_exchange_modules_path(&app)?;
+    let script_arg = powershell_compatible_path(&script);
+    let queue_file_arg = powershell_compatible_path(&queue_file);
+    let output_file_arg = powershell_compatible_path(&output_file);
+    let bundled_modules_arg = powershell_compatible_path(&bundled_modules);
 
     tauri::async_runtime::spawn_blocking(move || {
         let cleaned = sanitize_email_input(emails);
@@ -375,17 +397,17 @@ async fn run_group_action(
             .arg("-ExecutionPolicy")
             .arg("Bypass")
             .arg("-File")
-            .arg(script.as_os_str())
+            .arg(script_arg.as_os_str())
             .arg("-Action")
             .arg(act)
             .arg("-DistGroups")
             .arg(&group_arg)
             .arg("-InputFile")
-            .arg(queue_file.as_os_str())
+            .arg(queue_file_arg.as_os_str())
             .arg("-OutputFile")
-            .arg(output_file.as_os_str())
+            .arg(output_file_arg.as_os_str())
             .arg("-BundledModulesPath")
-            .arg(bundled_modules.as_os_str())
+            .arg(bundled_modules_arg.as_os_str())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -445,6 +467,32 @@ mod tests {
             .join("scripts")
             .join(file_name);
         fs::read_to_string(&path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_compatible_path_removes_verbatim_drive_prefix() {
+        let path = PathBuf::from(
+            r"\\?\C:\Users\Zon\AppData\Local\Trade Union Group Manager\vendor\powershell-modules",
+        );
+
+        assert_eq!(
+            powershell_compatible_path(&path),
+            PathBuf::from(
+                r"C:\Users\Zon\AppData\Local\Trade Union Group Manager\vendor\powershell-modules"
+            )
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_compatible_path_removes_verbatim_unc_prefix() {
+        let path = PathBuf::from(r"\\?\UNC\server\share\Trade Union Group Manager\scripts");
+
+        assert_eq!(
+            powershell_compatible_path(&path),
+            PathBuf::from(r"\\server\share\Trade Union Group Manager\scripts")
+        );
     }
 
     #[test]

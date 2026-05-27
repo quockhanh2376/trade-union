@@ -42,7 +42,17 @@ test("backend passes bundled module path into Exchange action scripts", () => {
   assert.match(mainSource, /fn bundled_exchange_modules_path\(app: &AppHandle\) -> Result<PathBuf, String>/);
   assert.match(mainSource, /\.resolve\("vendor\/powershell-modules", BaseDirectory::Resource\)/);
   assert.match(mainSource, /\.arg\("-BundledModulesPath"\)/);
-  assert.match(mainSource, /\.arg\(bundled_modules\.as_os_str\(\)\)/);
+  assert.match(mainSource, /\.arg\(bundled_modules_arg\.as_os_str\(\)\)/);
+});
+
+test("backend strips Windows verbatim resource paths before invoking PowerShell", () => {
+  assert.match(mainSource, /fn powershell_compatible_path\(path: &Path\) -> PathBuf/);
+  assert.match(mainSource, /let script_arg = powershell_compatible_path\(&script\)/);
+  assert.match(mainSource, /let queue_file_arg = powershell_compatible_path\(&queue_file\)/);
+  assert.match(mainSource, /let output_file_arg = powershell_compatible_path\(&output_file\)/);
+  assert.match(mainSource, /let bundled_modules_arg = powershell_compatible_path\(&bundled_modules\)/);
+  assert.doesNotMatch(mainSource, /\.arg\(script\.as_os_str\(\)\)/);
+  assert.match(mainSource, /\.arg\(bundled_modules_arg\.as_os_str\(\)\)/);
 });
 
 test("exchange scripts prefer bundled module path and fallback to online install", () => {
