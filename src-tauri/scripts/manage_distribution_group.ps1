@@ -14,16 +14,44 @@ param(
 
     [string]$AdminUpn,
 
+    [string]$BundledModulesPath,
+
     [switch]$ForceReconnect
 )
 
 $ErrorActionPreference = "Stop"
 
+function Add-BundledExchangeModulePath {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return
+    }
+    if (-not (Test-Path -Path $Path -PathType Container)) {
+        return
+    }
+    if (-not (Test-Path -Path (Join-Path -Path $Path -ChildPath "ExchangeOnlineManagement") -PathType Container)) {
+        return
+    }
+
+    $pathSeparator = [System.IO.Path]::PathSeparator
+    $existingPaths = @($env:PSModulePath -split [regex]::Escape($pathSeparator)) | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_) -and $_ -ne $Path
+    }
+    $env:PSModulePath = (@($Path) + $existingPaths) -join $pathSeparator
+}
+
 function Ensure-ExchangeModule {
+    param([string]$ModulePath)
+
+    Add-BundledExchangeModulePath -Path $ModulePath
+
     if (-not (Get-Module -ListAvailable -Name ExchangeOnlineManagement)) {
         Write-Host "ExchangeOnlineManagement module not found. Installing..." -ForegroundColor Yellow
         Install-Module -Name ExchangeOnlineManagement -Scope CurrentUser -Force -AllowClobber
     }
+
+    Import-Module ExchangeOnlineManagement -ErrorAction Stop
 }
 
 function Test-ValidEmail {
@@ -124,8 +152,7 @@ function Connect-ExchangeOnce {
 }
 
 try {
-    Ensure-ExchangeModule
-    Import-Module ExchangeOnlineManagement -ErrorAction Stop
+    Ensure-ExchangeModule -ModulePath $BundledModulesPath
 
     if ($ForceReconnect) {
         try {
