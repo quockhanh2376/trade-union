@@ -31,7 +31,8 @@
     ],
     "resources": [
       "scripts/manage_distribution_group.ps1",
-      "scripts/detect_group_type.ps1"
+      "scripts/detect_group_type.ps1",
+      "vendor/powershell-modules"
     ],
     "windows": {
       "webviewInstallMode": {

@@ -1,0 +1,56 @@
+import assert from "node:assert/strict";
+import { readdir, readFile } from "node:fs/promises";
+import test from "node:test";
+
+const tauriConfig = JSON.parse(
+  await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8")
+);
+const mainSource = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
+
+const exchangeScriptNames = [
+  "manage_distribution_group.ps1",
+  "detect_group_type.ps1",
+  "single_email_action.ps1",
+  "finalize_group.ps1"
+];
+
+const exchangeScripts = await Promise.all(
+  exchangeScriptNames.map(async (fileName) => ({
+    fileName,
+    source: await readFile(new URL(`../src-tauri/scripts/${fileName}`, import.meta.url), "utf8")
+  }))
+);
+
+test("installer bundles offline ExchangeOnlineManagement module resources", async () => {
+  assert.ok(
+    tauriConfig.bundle.resources.includes("vendor/powershell-modules"),
+    "PowerShell module vendor directory should be bundled as a Tauri resource"
+  );
+
+  const moduleVersions = await readdir(
+    new URL("../src-tauri/vendor/powershell-modules/ExchangeOnlineManagement", import.meta.url),
+    { withFileTypes: true }
+  );
+
+  assert.ok(
+    moduleVersions.some((entry) => entry.isDirectory()),
+    "ExchangeOnlineManagement should include at least one saved module version"
+  );
+});
+
+test("backend passes bundled module path into Exchange action scripts", () => {
+  assert.match(mainSource, /fn bundled_exchange_modules_path\(app: &AppHandle\) -> Result<PathBuf, String>/);
+  assert.match(mainSource, /\.resolve\("vendor\/powershell-modules", BaseDirectory::Resource\)/);
+  assert.match(mainSource, /\.arg\("-BundledModulesPath"\)/);
+  assert.match(mainSource, /\.arg\(bundled_modules\.as_os_str\(\)\)/);
+});
+
+test("exchange scripts prefer bundled module path and fallback to online install", () => {
+  for (const { fileName, source } of exchangeScripts) {
+    assert.match(source, /\[string\]\$BundledModulesPath/, `${fileName} should accept a bundled module path`);
+    assert.match(source, /function Add-BundledExchangeModulePath/, `${fileName} should prepend bundled module path`);
+    assert.match(source, /\$env:PSModulePath = "\$BundledModulesPath;/, `${fileName} should add bundled path to PSModulePath`);
+    assert.match(source, /Import-Module ExchangeOnlineManagement -ErrorAction Stop/, `${fileName} should import ExchangeOnlineManagement`);
+    assert.match(source, /Install-Module -Name ExchangeOnlineManagement -Scope CurrentUser -Force -AllowClobber/, `${fileName} should keep online fallback install`);
+  }
+});
