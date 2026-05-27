@@ -49,7 +49,11 @@ test("exchange scripts prefer bundled module path and fallback to online install
   for (const { fileName, source } of exchangeScripts) {
     assert.match(source, /\[string\]\$BundledModulesPath/, `${fileName} should accept a bundled module path`);
     assert.match(source, /function Add-BundledExchangeModulePath/, `${fileName} should prepend bundled module path`);
-    assert.match(source, /\$env:PSModulePath = "\$BundledModulesPath;/, `${fileName} should add bundled path to PSModulePath`);
+    assert.match(source, /\$pathSeparator = \[System\.IO\.Path\]::PathSeparator/, `${fileName} should use the platform path separator`);
+    assert.match(source, /-split\s+\[regex\]::Escape\(\$pathSeparator\)/, `${fileName} should split PSModulePath with the platform separator`);
+    assert.match(source, /-ne \$Path/, `${fileName} should de-duplicate using the validated module path`);
+    assert.match(source, /\(@\(\$Path\) \+ \$existingPaths\) -join \$pathSeparator/, `${fileName} should prepend the validated module path`);
+    assert.doesNotMatch(source, /\$env:PSModulePath = "\$BundledModulesPath;/, `${fileName} should not hard-code the Windows PSModulePath separator`);
     assert.match(source, /Import-Module ExchangeOnlineManagement -ErrorAction Stop/, `${fileName} should import ExchangeOnlineManagement`);
     assert.match(source, /Install-Module -Name ExchangeOnlineManagement -Scope CurrentUser -Force -AllowClobber/, `${fileName} should keep online fallback install`);
   }

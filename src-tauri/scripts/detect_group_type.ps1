@@ -21,10 +21,11 @@ function Add-BundledExchangeModulePath {
         return
     }
 
-    $existingPaths = @($env:PSModulePath -split ";") | Where-Object {
-        -not [string]::IsNullOrWhiteSpace($_) -and $_ -ne $BundledModulesPath
+    $pathSeparator = [System.IO.Path]::PathSeparator
+    $existingPaths = @($env:PSModulePath -split [regex]::Escape($pathSeparator)) | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_) -and $_ -ne $Path
     }
-    $env:PSModulePath = "$BundledModulesPath;$($existingPaths -join ';')"
+    $env:PSModulePath = (@($Path) + $existingPaths) -join $pathSeparator
 }
 
 function Ensure-ExchangeModule {
