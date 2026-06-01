@@ -97,6 +97,13 @@ fn workspace_script_path() -> PathBuf {
         .join("manage_distribution_group.ps1")
 }
 
+fn workspace_bundled_exchange_modules_path() -> PathBuf {
+    workspace_root()
+        .join("src-tauri")
+        .join("vendor")
+        .join("powershell-modules")
+}
+
 fn script_path(app: &AppHandle) -> Result<PathBuf, String> {
     if let Ok(path) = std::env::var("TRADE_UNION_ROOT") {
         let candidate = PathBuf::from(path)
@@ -122,6 +129,28 @@ fn script_path(app: &AppHandle) -> Result<PathBuf, String> {
     }
 
     Ok(resource_path)
+}
+
+fn bundled_exchange_modules_path(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Ok(path) = std::env::var("TRADE_UNION_ROOT") {
+        let candidate = PathBuf::from(path)
+            .join("src-tauri")
+            .join("vendor")
+            .join("powershell-modules");
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    let resource_path = app
+        .path()
+        .resolve("vendor/powershell-modules", BaseDirectory::Resource)
+        .map_err(|err| format!("Cannot resolve bundled PowerShell modules: {err}"))?;
+    if resource_path.exists() {
+        return Ok(resource_path);
+    }
+
+    Ok(workspace_bundled_exchange_modules_path())
 }
 
 fn legacy_credential_file_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -208,6 +237,24 @@ fn action_name(action: GroupAction) -> &'static str {
         GroupAction::Add => "Add",
         GroupAction::Remove => "Remove",
     }
+}
+
+#[cfg(windows)]
+fn powershell_compatible_path(path: &Path) -> PathBuf {
+    let value = path.as_os_str().to_string_lossy();
+    if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = value.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest);
+    }
+
+    path.to_path_buf()
+}
+
+#[cfg(not(windows))]
+fn powershell_compatible_path(path: &Path) -> PathBuf {
+    path.to_path_buf()
 }
 
 #[cfg(windows)]
@@ -318,6 +365,11 @@ async fn run_group_action(
     let queue_file = list_file_path(&app, action)?;
     let output_file = final_file_path(&app)?;
     let script = script_path(&app)?;
+    let bundled_modules = bundled_exchange_modules_path(&app)?;
+    let script_arg = powershell_compatible_path(&script);
+    let queue_file_arg = powershell_compatible_path(&queue_file);
+    let output_file_arg = powershell_compatible_path(&output_file);
+    let bundled_modules_arg = powershell_compatible_path(&bundled_modules);
 
     tauri::async_runtime::spawn_blocking(move || {
         let cleaned = sanitize_email_input(emails);
@@ -345,15 +397,17 @@ async fn run_group_action(
             .arg("-ExecutionPolicy")
             .arg("Bypass")
             .arg("-File")
-            .arg(script.as_os_str())
+            .arg(script_arg.as_os_str())
             .arg("-Action")
             .arg(act)
             .arg("-DistGroups")
             .arg(&group_arg)
             .arg("-InputFile")
-            .arg(queue_file.as_os_str())
+            .arg(queue_file_arg.as_os_str())
             .arg("-OutputFile")
-            .arg(output_file.as_os_str())
+            .arg(output_file_arg.as_os_str())
+            .arg("-BundledModulesPath")
+            .arg(bundled_modules_arg.as_os_str())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -413,6 +467,32 @@ mod tests {
             .join("scripts")
             .join(file_name);
         fs::read_to_string(&path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_compatible_path_removes_verbatim_drive_prefix() {
+        let path = PathBuf::from(
+            r"\\?\C:\Users\Zon\AppData\Local\Trade Union Group Manager\vendor\powershell-modules",
+        );
+
+        assert_eq!(
+            powershell_compatible_path(&path),
+            PathBuf::from(
+                r"C:\Users\Zon\AppData\Local\Trade Union Group Manager\vendor\powershell-modules"
+            )
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_compatible_path_removes_verbatim_unc_prefix() {
+        let path = PathBuf::from(r"\\?\UNC\server\share\Trade Union Group Manager\scripts");
+
+        assert_eq!(
+            powershell_compatible_path(&path),
+            PathBuf::from(r"\\server\share\Trade Union Group Manager\scripts")
+        );
     }
 
     #[test]

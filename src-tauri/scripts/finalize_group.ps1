@@ -3,16 +3,44 @@ param(
     [string]$DistGroup,
 
     [Parameter(Mandatory = $true)]
-    [string]$OutputFile
+    [string]$OutputFile,
+
+    [string]$BundledModulesPath
 )
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
+function Add-BundledExchangeModulePath {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return
+    }
+    if (-not (Test-Path -Path $Path -PathType Container)) {
+        return
+    }
+    if (-not (Test-Path -Path (Join-Path -Path $Path -ChildPath "ExchangeOnlineManagement") -PathType Container)) {
+        return
+    }
+
+    $pathSeparator = [System.IO.Path]::PathSeparator
+    $existingPaths = @($env:PSModulePath -split [regex]::Escape($pathSeparator)) | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_) -and $_ -ne $Path
+    }
+    $env:PSModulePath = (@($Path) + $existingPaths) -join $pathSeparator
+}
+
 function Ensure-ExchangeModule {
+    param([string]$ModulePath)
+
+    Add-BundledExchangeModulePath -Path $ModulePath
+
     if (-not (Get-Module -ListAvailable -Name ExchangeOnlineManagement)) {
         Install-Module -Name ExchangeOnlineManagement -Scope CurrentUser -Force -AllowClobber
     }
+
+    Import-Module ExchangeOnlineManagement -ErrorAction Stop
 }
 
 function Is-AlreadyConnected {
@@ -40,8 +68,7 @@ function Get-ExchangeConnectParameters {
 }
 
 try {
-    Ensure-ExchangeModule
-    Import-Module ExchangeOnlineManagement -ErrorAction Stop
+    Ensure-ExchangeModule -ModulePath $BundledModulesPath
 
     if (-not (Is-AlreadyConnected)) {
         $connectParams = Get-ExchangeConnectParameters
