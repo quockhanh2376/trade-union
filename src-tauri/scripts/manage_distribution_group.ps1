@@ -120,7 +120,7 @@ function Is-SharedMailbox {
     }
 }
 
-
+function Get-ExchangeConnectParameters {
     param(
         [string]$AdminAccount
     )
