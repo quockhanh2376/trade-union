@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import "./style.css";
 import type { QueueName, GroupRunResult, ActionDetail } from "./types";
 import { LOG_HISTORY_MAX_LINES } from "./constants";
@@ -32,6 +33,7 @@ app.innerHTML = `
     <header class="hero">
       <div class="hero-top">
         <h1>Group Manager</h1>
+        <p id="app-version" class="app-version"></p>
         <div class="hero-controls">
           <div class="group-email-inline">
             <label for="group-email">Group:</label>
@@ -620,4 +622,14 @@ wireDropZone(addZone, "add");
 wireDropZone(removeZone, "remove");
 renderLogHistory();
 void initializeEmptyQueues();
+
+// ── Version display ───────────────────────────────────────────────
+const appVersionEl = document.getElementById("app-version");
+if (appVersionEl) {
+  getVersion().then((v) => {
+    appVersionEl.textContent = `v${v}`;
+  }).catch(() => {
+    appVersionEl.textContent = "";
+  });
+}
 

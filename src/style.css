@@ -79,6 +79,14 @@ body {
   letter-spacing: 0.02em;
 }
 
+.app-version {
+  margin: 0;
+  font-size: 0.7rem;
+  color: var(--text-soft);
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+}
+
 .hero p {
   margin: 0;
   color: var(--text-soft);
