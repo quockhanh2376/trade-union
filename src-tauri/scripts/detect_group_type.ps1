@@ -45,6 +45,7 @@ function Resolve-GroupType {
 
     switch -Regex ($RawType) {
         "^GroupMailbox$" { return "M365" }
+        "^SharedMailbox$" { return "SharedMailbox" }
         "SecurityGroup|MailUniversalSecurityGroup|UniversalSecurityGroup" { return "Security" }
         "MailUniversalDistributionGroup|DynamicDistributionGroup" { return "Distribution" }
         default { return "Unknown" }

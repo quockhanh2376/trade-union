@@ -115,14 +115,34 @@ try {
         exit 1
     }
 
+    # Detect if target is a Shared Mailbox
+    $isSharedMailbox = $false
+    try {
+        $recipient = Get-Recipient -Identity $DistGroup -ErrorAction Stop
+        $isSharedMailbox = ([string]$recipient.RecipientTypeDetails) -eq "SharedMailbox"
+    }
+    catch {}
+
     # Execute action
-    if ($Action -eq "Add") {
-        Add-DistributionGroupMember -Identity $DistGroup -Member $trimmed -BypassSecurityGroupManagerCheck -ErrorAction Stop
-        Write-Host "Added: $trimmed"
+    if ($isSharedMailbox) {
+        if ($Action -eq "Add") {
+            Add-MailboxPermission -Identity $DistGroup -User $trimmed -AccessRights FullAccess -AutoMapping $false -ErrorAction Stop | Out-Null
+            Write-Host "Added: $trimmed"
+        }
+        else {
+            Remove-MailboxPermission -Identity $DistGroup -User $trimmed -AccessRights FullAccess -Confirm:$false -ErrorAction Stop | Out-Null
+            Write-Host "Removed: $trimmed"
+        }
     }
     else {
-        Remove-DistributionGroupMember -Identity $DistGroup -Member $trimmed -BypassSecurityGroupManagerCheck -Confirm:$false -ErrorAction Stop
-        Write-Host "Removed: $trimmed"
+        if ($Action -eq "Add") {
+            Add-DistributionGroupMember -Identity $DistGroup -Member $trimmed -BypassSecurityGroupManagerCheck -ErrorAction Stop
+            Write-Host "Added: $trimmed"
+        }
+        else {
+            Remove-DistributionGroupMember -Identity $DistGroup -Member $trimmed -BypassSecurityGroupManagerCheck -Confirm:$false -ErrorAction Stop
+            Write-Host "Removed: $trimmed"
+        }
     }
 
     # NOTE: We intentionally do NOT disconnect here so the session stays alive for subsequent calls

@@ -109,6 +109,17 @@ function Read-GroupList {
     return $items.ToArray()
 }
 
+function Is-SharedMailbox {
+    param([string]$Identity)
+    try {
+        $recipient = Get-Recipient -Identity $Identity -ErrorAction Stop
+        return ([string]$recipient.RecipientTypeDetails) -eq "SharedMailbox"
+    }
+    catch {
+        return $false
+    }
+}
+
 function Get-ExchangeConnectParameters {
     param(
         [string]$AdminAccount
@@ -185,14 +196,26 @@ try {
         $groupIndex++
         Write-Host "Running $Action for $group ($groupIndex/$($groups.Count))..."
 
+        $isSharedMailbox = Is-SharedMailbox -Identity $group
+
         foreach ($email in $emails) {
             $processedCount++
             try {
-                if ($Action -eq "Add") {
-                    Add-DistributionGroupMember -Identity $group -Member $email -BypassSecurityGroupManagerCheck -ErrorAction Stop
+                if ($isSharedMailbox) {
+                    if ($Action -eq "Add") {
+                        Add-MailboxPermission -Identity $group -User $email -AccessRights FullAccess -AutoMapping $false -ErrorAction Stop | Out-Null
+                    }
+                    else {
+                        Remove-MailboxPermission -Identity $group -User $email -AccessRights FullAccess -Confirm:$false -ErrorAction Stop | Out-Null
+                    }
                 }
                 else {
-                    Remove-DistributionGroupMember -Identity $group -Member $email -BypassSecurityGroupManagerCheck -Confirm:$false -ErrorAction Stop
+                    if ($Action -eq "Add") {
+                        Add-DistributionGroupMember -Identity $group -Member $email -BypassSecurityGroupManagerCheck -ErrorAction Stop
+                    }
+                    else {
+                        Remove-DistributionGroupMember -Identity $group -Member $email -BypassSecurityGroupManagerCheck -Confirm:$false -ErrorAction Stop
+                    }
                 }
 
                 $successCount++
@@ -219,8 +242,15 @@ try {
         }
 
         try {
-            $members = Get-DistributionGroupMember -Identity $group -ErrorAction Stop
-            $members | Select-Object -ExpandProperty PrimarySmtpAddress | Out-File -FilePath $OutputFile -Encoding UTF8
+            if ($isSharedMailbox) {
+                $members = Get-MailboxPermission -Identity $group -ErrorAction Stop |
+                    Where-Object { $_.User -notlike "NT AUTHORITY\*" -and $_.IsInherited -eq $false }
+                $members | Select-Object -ExpandProperty User | Out-File -FilePath $OutputFile -Encoding UTF8
+            }
+            else {
+                $members = Get-DistributionGroupMember -Identity $group -ErrorAction Stop
+                $members | Select-Object -ExpandProperty PrimarySmtpAddress | Out-File -FilePath $OutputFile -Encoding UTF8
+            }
             $lastExportedGroup = $group
             Write-Host "Updated members exported to $OutputFile for $group"
         }

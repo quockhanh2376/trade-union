@@ -75,11 +75,27 @@ try {
         Connect-ExchangeOnline @connectParams
     }
 
-    $members = Get-DistributionGroupMember -Identity $DistGroup -ErrorAction Stop
-    $members | Select-Object -ExpandProperty PrimarySmtpAddress | Out-File -FilePath $OutputFile -Encoding UTF8
+    # Detect if target is a Shared Mailbox
+    $isSharedMailbox = $false
+    try {
+        $recipient = Get-Recipient -Identity $DistGroup -ErrorAction Stop
+        $isSharedMailbox = ([string]$recipient.RecipientTypeDetails) -eq "SharedMailbox"
+    }
+    catch {}
 
-    Write-Host "Updated members exported to $OutputFile"
-    Write-Host "Total members: $($members.Count)"
+    if ($isSharedMailbox) {
+        $members = Get-MailboxPermission -Identity $DistGroup -ErrorAction Stop |
+            Where-Object { $_.User -notlike "NT AUTHORITY\*" -and $_.IsInherited -eq $false }
+        $members | Select-Object -ExpandProperty User | Out-File -FilePath $OutputFile -Encoding UTF8
+        Write-Host "Updated members exported to $OutputFile"
+        Write-Host "Total members: $($members.Count)"
+    }
+    else {
+        $members = Get-DistributionGroupMember -Identity $DistGroup -ErrorAction Stop
+        $members | Select-Object -ExpandProperty PrimarySmtpAddress | Out-File -FilePath $OutputFile -Encoding UTF8
+        Write-Host "Updated members exported to $OutputFile"
+        Write-Host "Total members: $($members.Count)"
+    }
 }
 catch {
     Write-Error $_

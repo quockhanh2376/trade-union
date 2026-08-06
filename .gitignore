@@ -53,6 +53,12 @@ Thumbs.db
 *.swo
 *~
 
+# Tooling artifacts
+.playwright-mcp/
+
+# Screenshots
+trade-union-disable-empty-run-buttons.png
+
 # OS
 .DS_Store
 Thumbs.db

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import "./style.css";
 import type { QueueName, GroupRunResult, ActionDetail } from "./types";
 import { LOG_HISTORY_MAX_LINES } from "./constants";
@@ -32,6 +33,7 @@ app.innerHTML = `
     <header class="hero">
       <div class="hero-top">
         <h1>Group Manager</h1>
+        <p id="app-version" class="app-version"></p>
         <div class="hero-controls">
           <div class="group-email-inline">
             <label for="group-email">Group:</label>
@@ -46,7 +48,10 @@ app.innerHTML = `
     </header>
 
     <section class="composer">
-      <label for="bulk-input">Email List</label>
+      <div class="bulk-label-row">
+        <label for="bulk-input">Email List</label>
+        <span id="bulk-count" class="bulk-count-circle is-empty" title="Total emails in list">0</span>
+      </div>
       <div class="bulk-input-wrap">
         <div id="bulk-input" class="bulk-editable" contenteditable="true" data-placeholder="alice@company.com&#10;bob@company.com"></div>
         <button id="clear-bulk-input" class="clear-bulk-input-btn" type="button" aria-label="Clear email list" title="Clear email list">X</button>
@@ -128,6 +133,7 @@ app.innerHTML = `
 `;
 
 const bulkInput = document.querySelector<HTMLDivElement>("#bulk-input")!;
+const bulkCount = document.querySelector<HTMLSpanElement>("#bulk-count")!;
 const addZone = document.querySelector<HTMLUListElement>("#add-zone")!;
 const removeZone = document.querySelector<HTMLUListElement>("#remove-zone")!;
 const addCount = document.querySelector<HTMLSpanElement>("#add-count")!;
@@ -172,6 +178,13 @@ function clearBulkInput(): void {
   bulkInput.textContent = "";
   clearBulkInputFromSession();
   bulkInput.focus();
+  updateBulkCount();
+}
+
+function updateBulkCount(): void {
+  const count = parseEmails(bulkInput.innerText).length;
+  bulkCount.textContent = String(count);
+  bulkCount.classList.toggle("is-empty", count === 0);
 }
 
 function renderLogHistory(): void {
@@ -391,6 +404,7 @@ async function queueFromInput(target: QueueName): Promise<void> {
   ensureInQueue(target, emails);
   // Auto-sort, deduplicate, and remove blank entries from the input area
   bulkInput.textContent = sanitizeEmailInput(bulkInput.innerText);
+  updateBulkCount();
   render();
   await persistQueues();
   log(`Queued ${emails.length} email(s) into ${target.toUpperCase()}.`);
@@ -401,6 +415,7 @@ async function clearQueues(): Promise<void> {
   state.add = [];
   state.remove = [];
   bulkInput.textContent = "";
+  updateBulkCount();
   renderResultDetails([]);
   clearBulkInputFromSession();
   resultSuccess.style.display = "none";
@@ -553,6 +568,7 @@ async function initializeEmptyQueues(): Promise<void> {
   state.add = [];
   state.remove = [];
   bulkInput.textContent = loadBulkInputFromSession();
+  updateBulkCount();
   render();
   resetLayout(false);
   try {
@@ -593,6 +609,7 @@ adminUpnInput.addEventListener("change", () => {
 
 bulkInput.addEventListener("input", () => {
   saveBulkInputToSession(bulkInput.innerText);
+  updateBulkCount();
 });
 
 historyModal.addEventListener("click", (event) => {
@@ -620,4 +637,14 @@ wireDropZone(addZone, "add");
 wireDropZone(removeZone, "remove");
 renderLogHistory();
 void initializeEmptyQueues();
+
+// ── Version display ───────────────────────────────────────────────
+const appVersionEl = document.getElementById("app-version");
+if (appVersionEl) {
+  getVersion().then((v) => {
+    appVersionEl.textContent = `v${v}`;
+  }).catch(() => {
+    appVersionEl.textContent = "";
+  });
+}
 
