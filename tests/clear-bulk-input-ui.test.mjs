@@ -4,6 +4,7 @@ import test from "node:test";
 
 const mainSource = await readFile(new URL("../src/main.ts", import.meta.url), "utf8");
 const styleSource = await readFile(new URL("../src/style.css", import.meta.url), "utf8");
+const tauriSource = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
 
 test("email list shows a live total count in a circle badge", () => {
   assert.match(mainSource, /id="bulk-count" class="bulk-count-circle is-empty"/);
@@ -56,4 +57,11 @@ test("lane run buttons are disabled when their queue is empty", () => {
   assert.match(mainSource, /function render\(\): void\s*{[^}]*updateRunButtonStates\(\);/s);
   assert.match(mainSource, /function setBusy\(value: boolean\): void\s*{[\s\S]*?isBusy = value;/);
   assert.match(mainSource, /function setBusy\(value: boolean\): void\s*{[\s\S]*?updateRunButtonStates\(\);/);
+});
+
+test("group input supports comma-separated groups in user-entered order", () => {
+  assert.match(mainSource, /placeholder="group1@company\.com, group2@company\.com"/);
+  assert.match(mainSource, /if \(groups\.length > 1\)/);
+  assert.match(mainSource, /Group order: \$\{groups\.join\(" -> "\)\}/);
+  assert.match(tauriSource, /let group_arg = groups\.join\(", "\);/);
 });
