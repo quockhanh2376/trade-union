@@ -144,6 +144,38 @@ body {
   font-size: 0.92rem;
 }
 
+.bulk-label-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.bulk-count-circle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  color: var(--accent);
+  background: rgba(35, 199, 168, 0.12);
+  font-family: "Consolas", "Cascadia Mono", monospace;
+  font-size: 0.85rem;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow: 0 0 10px var(--glow);
+  flex-shrink: 0;
+}
+
+.bulk-count-circle.is-empty {
+  border-color: var(--line);
+  color: var(--text-soft);
+  background: transparent;
+  box-shadow: none;
+  opacity: 0.6;
+}
+
 .bulk-input-wrap {
   position: relative;
 }

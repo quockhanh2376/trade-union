@@ -5,6 +5,16 @@ import test from "node:test";
 const mainSource = await readFile(new URL("../src/main.ts", import.meta.url), "utf8");
 const styleSource = await readFile(new URL("../src/style.css", import.meta.url), "utf8");
 
+test("email list shows a live total count in a circle badge", () => {
+  assert.match(mainSource, /id="bulk-count" class="bulk-count-circle is-empty"/);
+  assert.match(mainSource, /const bulkCount = document\.querySelector<HTMLSpanElement>\("#bulk-count"\)!;/);
+  assert.match(mainSource, /function updateBulkCount\(\): void/);
+  assert.match(mainSource, /const count = parseEmails\(bulkInput\.innerText\)\.length;/);
+  assert.match(mainSource, /bulkCount\.classList\.toggle\("is-empty", count === 0\);/);
+  assert.match(styleSource, /\.bulk-count-circle/);
+  assert.match(styleSource, /\.bulk-count-circle\.is-empty/);
+});
+
 test("email list has a dedicated clear button", () => {
   assert.match(mainSource, /id="clear-bulk-input"/);
   assert.match(mainSource, /const clearBulkInputBtn = document\.querySelector<HTMLButtonElement>\("#clear-bulk-input"\)!;/);
