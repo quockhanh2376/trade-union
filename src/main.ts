@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import "./style.css";
-import type { QueueName, GroupRunResult, ActionDetail } from "./types";
+import type { QueueName, GroupRunResult, ActionDetail, SeedEmails } from "./types";
 import { LOG_HISTORY_MAX_LINES } from "./constants";
 import { normalizeEmail, parseEmails, escapeHtml, sanitizeEmailInput } from "./email";
 import {
@@ -22,6 +22,7 @@ import {
   autoExpireAuthCache,
 } from "./auth";
 import { state, ensureInQueue, removeFromQueue, moveEmail } from "./queue";
+import { resolveInitialQueues } from "./queue-startup";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) {
@@ -165,6 +166,12 @@ const clearLogHistoryBtn = document.querySelector<HTMLButtonElement>("#clear-log
 const clearBulkInputBtn = document.querySelector<HTMLButtonElement>("#clear-bulk-input")!;
 
 let isBusy = false;
+/**
+ * Set when the initial persisted-queue load failed. While true, queue-mutating
+ * actions are blocked so an empty UI cannot overwrite saved data on disk. The
+ * user must restart the app to retry the load. (F-02 load-failure safety.)
+ */
+let loadFailed = false;
 
 const logHistory = loadLogHistory();
 
@@ -437,6 +444,10 @@ async function undoSwapQueues(): Promise<void> {
 
 // ── Run action ────────────────────────────────────────────────────
 async function runAction(action: QueueName): Promise<void> {
+  if (loadFailed) {
+    log("Queues are read-only because the saved state could not be loaded. Restart the app to retry.", true);
+    return;
+  }
   const payload = [...state[action]];
   if (!payload.length) {
     log(`Queue ${action.toUpperCase()} is empty.`, true);
@@ -508,6 +519,10 @@ async function runAction(action: QueueName): Promise<void> {
 
 function setBusy(value: boolean): void {
   isBusy = value;
+  // When the startup load failed, queue-mutating controls stay locked even
+  // when a transient busy period ends, so an empty UI can't overwrite the
+  // saved queues on disk. (F-02 load-failure safety.)
+  const effectivelyBusy = value || loadFailed;
   [
     queueToAddBtn,
     queueToRemoveBtn,
@@ -518,7 +533,7 @@ function setBusy(value: boolean): void {
     adminUpnInput,
     clearBulkInputBtn
   ].forEach((el) => {
-    el.disabled = value;
+    el.disabled = effectivelyBusy;
   });
   updateRunButtonStates();
 }
@@ -536,6 +551,7 @@ function bindDynamicEvents(): void {
 
   document.querySelectorAll<HTMLButtonElement>(".delete-btn").forEach((button) => {
     button.addEventListener("click", async () => {
+      if (loadFailed) return;
       const email = button.dataset.email ?? "";
       const source = button.dataset.source as QueueName;
       if (!email || (source !== "add" && source !== "remove")) return;
@@ -557,6 +573,7 @@ function wireDropZone(zone: HTMLUListElement, target: QueueName): void {
   zone.addEventListener("drop", async (event) => {
     event.preventDefault();
     zone.classList.remove("drop-hover");
+    if (loadFailed) return;
     const email = event.dataTransfer?.getData("text/plain") ?? "";
     const sourceRaw = event.dataTransfer?.getData("application/x-source") ?? "";
     const source = sourceRaw === "add" || sourceRaw === "remove" ? sourceRaw : null;
@@ -568,18 +585,32 @@ function wireDropZone(zone: HTMLUListElement, target: QueueName): void {
 }
 
 // ── Load seed files ───────────────────────────────────────────────
-async function initializeEmptyQueues(): Promise<void> {
-  state.add = [];
-  state.remove = [];
+async function initializeQueues(): Promise<void> {
+  // Restore the bulk-input draft (session-only, never persisted to the backend)
   bulkInput.textContent = loadBulkInputFromSession();
   updateBulkCount();
+
+  // Load persisted queue state from the backend before touching it.
+  // The resolver never persists; on load failure it returns the empty default
+  // without overwriting saved data (F-02 — queue-wipe-on-startup).
+  const result = await resolveInitialQueues({
+    loadPersistedQueues: () => invoke<SeedEmails>("load_seed_emails"),
+    onError: (message) => log(message, true),
+  });
+  state.add = result.queues.add;
+  state.remove = result.queues.remove;
+
+  // If the persisted load failed, lock queue mutations so an empty UI cannot
+  // overwrite the saved queues on disk via a later Add/Remove/Clear action.
+  loadFailed = !result.loaded;
+  if (loadFailed) {
+    log("Queues are read-only until the app is restarted and the saved state loads. Restart to retry.", true);
+    setBusy(true);
+    bulkInput.contentEditable = "false";
+  }
+
   render();
   resetLayout(false);
-  try {
-    await persistQueues();
-  } catch (error) {
-    log(`Cannot initialize empty queues: ${String(error)}`, true);
-  }
 }
 
 // ── Event listeners ───────────────────────────────────────────────
@@ -640,7 +671,7 @@ window.addEventListener("beforeunload", () => {
 wireDropZone(addZone, "add");
 wireDropZone(removeZone, "remove");
 renderLogHistory();
-void initializeEmptyQueues();
+void initializeQueues();
 
 // ── Version display ───────────────────────────────────────────────
 const appVersionEl = document.getElementById("app-version");

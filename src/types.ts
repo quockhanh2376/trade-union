@@ -1,5 +1,10 @@
 export type QueueName = "add" | "remove";
 
+export interface SeedEmails {
+  add: string[];
+  remove: string[];
+}
+
 export interface GroupRunResult {
   action: string;
   processed: number;
