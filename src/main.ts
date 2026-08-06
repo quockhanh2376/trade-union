@@ -37,7 +37,7 @@ app.innerHTML = `
         <div class="hero-controls">
           <div class="group-email-inline">
             <label for="group-email">Group:</label>
-            <input id="group-email" type="text" placeholder="group1@company.com; group2@company.com" />
+            <input id="group-email" type="text" placeholder="group1@company.com, group2@company.com" />
           </div>
           <div class="admin-upn-inline">
             <label for="admin-upn">Admin:</label>
@@ -475,6 +475,10 @@ async function runAction(action: QueueName): Promise<void> {
       log("Reusing Microsoft admin auth session for this app session.");
     } else {
       log("Opening Microsoft sign-in window. Complete 2FA when prompted.");
+    }
+
+    if (groups.length > 1) {
+      log(`Group order: ${groups.join(" -> ")}`);
     }
 
     const result = await invoke<GroupRunResult>("run_group_action", {
