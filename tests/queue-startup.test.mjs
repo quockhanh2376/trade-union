@@ -112,7 +112,7 @@ test("Wiring: src/main.ts calls resolveInitialQueues during startup", () => {
   assert.doesNotMatch(mainSource, /function initializeEmptyQueues\b/);
   assert.doesNotMatch(mainSource, /void initializeEmptyQueues\(\)/);
   // The new function and the production helper must both be wired.
-  assert.match(mainSource, /import \{ resolveInitialQueues \} from "\.\/queue-startup"/);
+  assert.match(mainSource, /import \{ resolveInitialQueues \} from "\.\/queue-startup\.ts"/);
   assert.match(mainSource, /async function initializeQueues\(\): Promise<void>/);
   assert.match(mainSource, /void initializeQueues\(\);/);
   assert.match(mainSource, /await resolveInitialQueues\(/);

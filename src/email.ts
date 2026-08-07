@@ -1,4 +1,4 @@
-import { EMAIL_REGEX } from "./constants";
+import { EMAIL_REGEX } from "./constants.ts";
 
 export function normalizeEmail(email: string): string | null {
   const value = email.trim().toLowerCase();

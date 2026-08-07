@@ -1,4 +1,4 @@
-import type { QueueName, SeedEmails } from "./types";
+import type { QueueName, SeedEmails } from "./types.ts";
 
 /**
  * Default queue state used when no persisted data is available or a load

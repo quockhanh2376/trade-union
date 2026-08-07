@@ -1,4 +1,4 @@
-import type { QueueName } from "./types";
+import type { QueueName } from "./types.ts";
 
 export const state: Record<QueueName, string[]> = {
   add: [],
