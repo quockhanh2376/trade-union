@@ -1,9 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import "./style.css";
-import type { QueueName, GroupRunResult, ActionDetail, SeedEmails } from "./types";
-import { LOG_HISTORY_MAX_LINES } from "./constants";
-import { normalizeEmail, parseEmails, escapeHtml, sanitizeEmailInput } from "./email";
+import type { QueueName, GroupRunResult, ActionDetail, SeedEmails } from "./types.ts";
+import { LOG_HISTORY_MAX_LINES } from "./constants.ts";
+import { normalizeEmail, parseEmails, escapeHtml, sanitizeEmailInput } from "./email.ts";
 import {
   loadStoredGroupEmails,
   saveGroupEmails,
@@ -14,15 +14,16 @@ import {
   loadBulkInputFromSession,
   saveBulkInputToSession,
   clearBulkInputFromSession,
-} from "./storage";
+} from "./storage.ts";
 import {
   hasActiveAuthSession,
   rememberAuthSession,
   clearAuthSession,
   autoExpireAuthCache,
-} from "./auth";
-import { state, ensureInQueue, removeFromQueue, moveEmail } from "./queue";
-import { resolveInitialQueues } from "./queue-startup";
+} from "./auth.ts";
+import { state, ensureInQueue, removeFromQueue, moveEmail } from "./queue.ts";
+import { resolveInitialQueues } from "./queue-startup.ts";
+import { resolveRemovableEmails } from "./run-reconciliation.ts";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) {
@@ -299,48 +300,15 @@ async function autoRemoveCompletedEmails(
   details: ActionDetail[],
   failedCount: number
 ): Promise<void> {
-  let removable = new Set<string>();
-
-  if (details.length) {
-    const expectedGroups = groups.length;
-    const stats = new Map<string, { okGroups: Set<string>; hasFail: boolean }>();
-
-    details.forEach((item) => {
-      const email = normalizeEmail(item.email);
-      const group = normalizeEmail(item.group);
-      if (!email || !group) return;
-
-      if (!stats.has(email)) {
-        stats.set(email, { okGroups: new Set<string>(), hasFail: false });
-      }
-
-      const record = stats.get(email)!;
-      if (normalizeStatus(item.status) === "ok") {
-        record.okGroups.add(group);
-      } else {
-        record.hasFail = true;
-      }
-    });
-
-    payload.forEach((email) => {
-      const record = stats.get(email);
-      if (!record) return;
-      if (!record.hasFail && record.okGroups.size === expectedGroups) {
-        removable.add(email);
-      }
-    });
-  } else if (failedCount === 0) {
-    removable = new Set(payload);
-  }
-
-  if (!removable.size) {
+  const { removable, count } = resolveRemovableEmails({ action, payload, groups, details, failedCount });
+  if (!count) {
     return;
   }
 
   state[action] = state[action].filter((email) => !removable.has(email));
   render();
   await persistQueues();
-  log(`Auto removed ${removable.size} completed email(s) from ${action.toUpperCase()} queue.`);
+  log(`Auto removed ${count} completed email(s) from ${action.toUpperCase()} queue.`);
 }
 
 // ── Progress bar ──────────────────────────────────────────────────
