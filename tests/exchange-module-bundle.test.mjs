@@ -9,9 +9,7 @@ const mainSource = await readFile(new URL("../src-tauri/src/main.rs", import.met
 
 const exchangeScriptNames = [
   "manage_distribution_group.ps1",
-  "detect_group_type.ps1",
-  "single_email_action.ps1",
-  "finalize_group.ps1"
+  "detect_group_type.ps1"
 ];
 
 const exchangeScripts = await Promise.all(
