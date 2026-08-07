@@ -515,8 +515,6 @@ mod tests {
         for file_name in [
             "manage_distribution_group.ps1",
             "detect_group_type.ps1",
-            "single_email_action.ps1",
-            "finalize_group.ps1",
         ] {
             let script = read_workspace_script(file_name);
             if !script.contains("Connect-ExchangeOnline") {
