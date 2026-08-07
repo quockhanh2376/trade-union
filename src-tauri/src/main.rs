@@ -6,9 +6,12 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::OnceLock,
+    sync::{mpsc, OnceLock},
+    thread,
+    time::Duration,
 };
 use tauri::{path::BaseDirectory, AppHandle, Manager};
+use wait_timeout::ChildExt;
 
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -117,7 +120,10 @@ fn script_path(app: &AppHandle) -> Result<PathBuf, String> {
 
     let resource_path = app
         .path()
-        .resolve("scripts/manage_distribution_group.ps1", BaseDirectory::Resource)
+        .resolve(
+            "scripts/manage_distribution_group.ps1",
+            BaseDirectory::Resource,
+        )
         .map_err(|err| format!("Cannot resolve bundled PowerShell script: {err}"))?;
     if resource_path.exists() {
         return Ok(resource_path);
@@ -277,7 +283,11 @@ fn hidden_powershell_command() -> Command {
             .unwrap_or(false)
     });
 
-    let exe = if use_pwsh { "pwsh.exe" } else { "powershell.exe" };
+    let exe = if use_pwsh {
+        "pwsh.exe"
+    } else {
+        "powershell.exe"
+    };
     let mut cmd = Command::new(exe);
     cmd.creation_flags(CREATE_NO_WINDOW);
     cmd
@@ -303,6 +313,149 @@ fn parse_result_json(stdout: &str) -> Option<(usize, usize, usize, Vec<ActionDet
         }
     }
     None
+}
+
+/// Maximum wall-clock time allowed for a single PowerShell Exchange action
+/// (Connect-ExchangeOnline + Add/Remove loop + export). Exchange modern auth
+/// with MFA can take a while, so this is intentionally generous.
+const POWERSHELL_ACTION_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
+/// Outcome of running a child process with a timeout.
+#[derive(Debug)]
+enum TimedOutput {
+    /// The process exited on its own within the timeout.
+    Output(std::process::Output),
+    /// The process did not exit within the timeout. It has been killed and
+    /// reaped; `partial` holds whatever stdout/stderr was drained before the
+    /// kill (best effort — may be incomplete).
+    TimedOut {
+        partial: std::process::Output,
+        timeout: Duration,
+    },
+}
+
+/// Spawn a configured `Command`, wait up to `timeout` for it to exit, and if
+/// it is still running then kill the (direct) child and reap it so it does
+/// not become a zombie.
+///
+/// Pipes are drained on two background threads while waiting, so a process
+/// that writes more than the OS pipe buffer (a few KB on Windows) cannot
+/// deadlock us by filling stdout/stderr and blocking on the next write.
+///
+/// Returns:
+/// - `Ok(TimedOutput::Output(_))` when the child exited on its own.
+/// - `Ok(TimedOutput::TimedOut { .. })` when the timeout elapsed; the child
+///   has been killed + waited.
+/// - `Err(_)` when the process could not be spawned.
+///
+/// Limitation: on Windows `child.kill()` terminates only the direct child
+/// (PowerShell). It does not guarantee killing the entire process tree
+/// (e.g. the Microsoft sign-in browser spawned by Exchange). Those descendants
+/// are expected to exit on their own once PowerShell is killed, but this
+/// helper does not perform a job-object/tree kill.
+fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<TimedOutput, String> {
+    let mut child = cmd
+        .spawn()
+        .map_err(|err| format!("Failed to launch process: {err}"))?;
+
+    // Drain stdout/stderr on background threads so the child cannot block on
+    // a full pipe while we are busy waiting for it to exit. This is the key
+    // difference from a naive `child.wait_timeout()` + post-read: without
+    // draining, a child that writes more than the pipe buffer (a few KB on
+    // Windows) will block on its next write and never exit, deadlocking us.
+    //
+    // Lifecycle contract: both reader threads are always joined before this
+    // function returns. When the direct child exits or is killed+reaped, the
+    // OS closes its ends of the stdout/stderr pipes; the reader threads then
+    // observe EOF, send their bytes, and finish, so `recv()` + `join()`
+    // returns promptly. This relies on the production fact that the child
+    // (PowerShell running manage_distribution_group.ps1) does not spawn
+    // explicit descendant processes that inherit these pipes — see the audit
+    // in F-06. If a descendant ever did keep a pipe open, `recv()` would
+    // block until that descendant exits; that is an accepted, documented
+    // limitation of direct-child-only kill (no job-object tree kill here).
+    let (stdout_tx, stdout_rx) = mpsc::channel::<Vec<u8>>();
+    let (stderr_tx, stderr_rx) = mpsc::channel::<Vec<u8>>();
+    let stdout_handle = child.stdout.take();
+    let stderr_handle = child.stderr.take();
+    let stdout_thread = thread::spawn(move || {
+        let _ = stdout_tx.send(read_all(stdout_handle));
+    });
+    let stderr_thread = thread::spawn(move || {
+        let _ = stderr_tx.send(read_all(stderr_handle));
+    });
+
+    match child.wait_timeout(timeout) {
+        Ok(Some(status)) => {
+            // Exited on its own — both readers hit EOF and send.
+            let stdout = recv_join(stdout_thread, &stdout_rx);
+            let stderr = recv_join(stderr_thread, &stderr_rx);
+            Ok(TimedOutput::Output(std::process::Output {
+                status,
+                stdout,
+                stderr,
+            }))
+        }
+        Ok(None) => {
+            // Timed out — kill the direct child and reap it. kill() on an
+            // already-exited process returns a benign error (race); we always
+            // wait() to reap regardless. After reap the OS closes the child's
+            // pipe ends, so the reader threads observe EOF and finish.
+            let kill_err = child.kill().err();
+            let wait_err = child.wait().err();
+            if kill_err.is_some() || wait_err.is_some() {
+                eprintln!(
+                    "run_with_timeout: kill={kill_err:?} wait={wait_err:?} (continuing with timeout result)"
+                );
+            }
+            let stdout = recv_join(stdout_thread, &stdout_rx);
+            let stderr = recv_join(stderr_thread, &stderr_rx);
+            let partial = std::process::Output {
+                status: std::process::ExitStatus::default(),
+                stdout,
+                stderr,
+            };
+            Ok(TimedOutput::TimedOut { partial, timeout })
+        }
+        Err(err) => {
+            // Best-effort cleanup before propagating. After kill+wait the
+            // pipes close and reader threads finish; we still join them.
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = recv_join(stdout_thread, &stdout_rx);
+            let _ = recv_join(stderr_thread, &stderr_rx);
+            Err(format!("Failed to wait on process: {err}"))
+        }
+    }
+}
+
+/// Read a captured child pipe to EOF, returning the bytes. Accepts `None`
+/// (no pipe was set up) and returns an empty buffer in that case.
+fn read_all<R: std::io::Read>(mut reader: Option<R>) -> Vec<u8> {
+    match reader.as_mut() {
+        Some(r) => {
+            let mut buf = Vec::new();
+            // Ignore read errors; partial output is acceptable here.
+            let _ = r.read_to_end(&mut buf);
+            buf
+        }
+        None => Vec::new(),
+    }
+}
+
+/// Receive the bytes produced by a reader thread and join the thread.
+///
+/// Blocks on `rx.recv()` until the reader hits EOF (after the child exits or
+/// is killed+reaped and the OS closes the pipe) and sends its bytes, then
+/// joins the thread. Because the reader only finishes once its pipe reaches
+/// EOF, and the child's pipe ends are closed by the OS when the child is
+/// reaped, this join returns promptly in practice.
+///
+/// This always joins — the reader thread is never detached.
+fn recv_join(handle: thread::JoinHandle<()>, rx: &mpsc::Receiver<Vec<u8>>) -> Vec<u8> {
+    let bytes = rx.recv().unwrap_or_default();
+    let _ = handle.join();
+    bytes
 }
 
 fn clear_legacy_saved_admin_credential_file(app: &AppHandle) -> Result<(), String> {
@@ -420,9 +573,19 @@ async fn run_group_action(
             cmd.arg("-ForceReconnect");
         }
 
-        let output = cmd
-            .output()
-            .map_err(|err| format!("Failed to launch PowerShell: {err}"))?;
+        let output = match run_with_timeout(cmd, POWERSHELL_ACTION_TIMEOUT)? {
+            TimedOutput::Output(o) => o,
+            TimedOutput::TimedOut { partial, timeout } => {
+                let secs = timeout.as_secs();
+                let stdout = String::from_utf8_lossy(&partial.stdout).trim().to_string();
+                let stderr = String::from_utf8_lossy(&partial.stderr).trim().to_string();
+                return Err(build_command_error(
+                    &format!("{act} action timed out after {secs} seconds and was terminated."),
+                    &stdout,
+                    &stderr,
+                ));
+            }
+        };
 
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -512,10 +675,7 @@ mod tests {
 
     #[test]
     fn exchange_scripts_disable_wam_when_hidden_powershell_can_block_auth_ui() {
-        for file_name in [
-            "manage_distribution_group.ps1",
-            "detect_group_type.ps1",
-        ] {
+        for file_name in ["manage_distribution_group.ps1", "detect_group_type.ps1"] {
             let script = read_workspace_script(file_name);
             if !script.contains("Connect-ExchangeOnline") {
                 continue;
@@ -534,6 +694,318 @@ mod tests {
                 "{file_name} should connect via splatted parameters so DisableWAM is applied consistently"
             );
         }
+    }
+
+    // ── run_with_timeout tests (F-06) ──────────────────────────────
+    // Cross-platform: use cmd.exe on Windows, sh on Unix. Do NOT invoke
+    // PowerShell or Exchange here.
+
+    /// Cross-platform helper: a `Command` that runs a tiny built-in shell
+    /// so tests don't depend on workspace scripts or network.
+    fn shell_command(line: &str) -> Command {
+        let mut cmd = if cfg!(windows) {
+            let mut c = Command::new("cmd.exe");
+            c.arg("/C").arg(line);
+            c
+        } else {
+            let mut c = Command::new("sh");
+            c.arg("-c").arg(line);
+            c
+        };
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        cmd
+    }
+
+    #[test]
+    fn run_with_timeout_fast_process_exits_normally() {
+        let cmd = shell_command(if cfg!(windows) {
+            "echo hello"
+        } else {
+            "printf hello"
+        });
+        let result = run_with_timeout(cmd, Duration::from_secs(5));
+        match result.expect("fast process should not error") {
+            TimedOutput::Output(o) => {
+                assert!(o.status.success(), "fast echo should succeed");
+                assert!(
+                    String::from_utf8_lossy(&o.stdout).contains("hello"),
+                    "stdout should contain the echoed text"
+                );
+            }
+            TimedOutput::TimedOut { .. } => panic!("fast process must not time out"),
+        }
+    }
+
+    #[test]
+    fn run_with_timeout_non_zero_exit_is_returned_not_error() {
+        // Exit code 3 — non-zero but a normal exit (not timeout, not spawn error).
+        let line = if cfg!(windows) { "exit /B 3" } else { "exit 3" };
+        let cmd = shell_command(line);
+        let result = run_with_timeout(cmd, Duration::from_secs(5));
+        match result.expect("non-zero exit should not error") {
+            TimedOutput::Output(o) => {
+                assert_eq!(o.status.code(), Some(3), "exit code should be 3");
+                assert!(!o.status.success());
+            }
+            TimedOutput::TimedOut { .. } => panic!("must not time out"),
+        }
+    }
+
+    #[test]
+    fn run_with_timeout_captures_stdout_and_stderr_separately() {
+        let line = if cfg!(windows) {
+            // cmd.exe: write to stdout then stderr.
+            "echo out-msg 1>nul 2>&1 & echo out-msg & echo err-msg 1>&2"
+        } else {
+            "printf 'out-msg\\n'; printf 'err-msg\\n' 1>&2"
+        };
+        let cmd = shell_command(line);
+        match run_with_timeout(cmd, Duration::from_secs(5)).expect("ok") {
+            TimedOutput::Output(o) => {
+                let out = String::from_utf8_lossy(&o.stdout);
+                let err = String::from_utf8_lossy(&o.stderr);
+                assert!(out.contains("out-msg"), "stdout: {out}");
+                assert!(err.contains("err-msg"), "stderr: {err}");
+            }
+            TimedOutput::TimedOut { .. } => panic!("must not time out"),
+        }
+    }
+
+    #[test]
+    fn run_with_timeout_spawn_failure_returns_error() {
+        // A non-existent executable cannot be spawned -> Err, not a timeout.
+        let mut cmd = Command::new("this-binary-does-not-exist-12345");
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let result = run_with_timeout(cmd, Duration::from_secs(5));
+        assert!(
+            result.is_err(),
+            "spawn failure should return Err, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn run_with_timeout_kills_and_reports_on_timeout() {
+        // A sleep that outlasts the timeout. Run a direct long-running process
+        // (no shell wrapper) so that killing the direct child closes the pipes
+        // and the reader threads join promptly. This mirrors the production
+        // shape (direct PowerShell child, no explicit descendant that inherits
+        // the pipes).
+        //
+        // What this test proves:
+        //  - The helper returns `TimedOut` (not `Output`): partial output is
+        //    NOT treated as success.
+        //  - The helper returns well before the child's natural 30s lifetime
+        //    would end (elapsed < 15s). Returning promptly is only possible if
+        //    the child was killed and its pipes closed so the reader threads
+        //    could join. If kill+reap did not happen, `recv()`/`join()` would
+        //    block until the 30s sleep finished, blowing the 15s budget.
+        //  What this test does NOT prove:
+        //  - It does not observe the child PID or ExitStatus after kill, so it
+        //    is indirect evidence of reaping rather than a direct assertion.
+        let mut cmd = if cfg!(windows) {
+            // ping with no output redirect; -n 30 sleeps ~29s.
+            let mut c = Command::new("ping.exe");
+            c.arg("-n").arg("30").arg("127.0.0.1");
+            c
+        } else {
+            let mut c = Command::new("sleep");
+            c.arg("30");
+            c
+        };
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let timeout = Duration::from_secs(1);
+        let start = std::time::Instant::now();
+        let result = run_with_timeout(cmd, timeout);
+        let elapsed = start.elapsed();
+
+        match result.expect("timeout path should not return Err") {
+            TimedOutput::TimedOut { timeout: t, .. } => {
+                assert_eq!(t, timeout, "reported timeout should match input");
+                assert!(
+                    elapsed < Duration::from_secs(15),
+                    "should return soon after timeout (kill closes pipes, readers join), took {elapsed:?}"
+                );
+            }
+            TimedOutput::Output(_) => panic!("long sleep must time out, not exit cleanly"),
+        }
+    }
+
+    #[test]
+    fn run_with_timeout_does_not_deadlock_on_large_stdout() {
+        // Write >= 1 MB to stdout — far above the Windows pipe buffer (~4-64KB).
+        // A naive `wait_timeout` + post-read would deadlock here: the child
+        // would block on a full pipe and never exit. The thread-drain design
+        // keeps the pipe empty so the child exits on its own within the timeout.
+        let line = if cfg!(windows) {
+            // cmd.exe /C uses single % for loop variables (%% is for batch files).
+            // Print a ~1KB line 1100 times ≈ 1.1 MB.
+            "for /L %i in (1,1,1100) do @echo AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        } else {
+            "yes A | head -c 1100000"
+        };
+        let cmd = shell_command(line);
+        let start = std::time::Instant::now();
+        let result = run_with_timeout(cmd, Duration::from_secs(20));
+        let elapsed = start.elapsed();
+
+        match result.expect("large output should not error") {
+            TimedOutput::Output(o) => {
+                assert!(
+                    o.stdout.len() >= 1_000_000,
+                    "expected >=1MB captured, got {} bytes",
+                    o.stdout.len()
+                );
+                assert!(
+                    elapsed < Duration::from_secs(15),
+                    "large-output run should finish fast (no deadlock), took {elapsed:?}"
+                );
+            }
+            TimedOutput::TimedOut { .. } => {
+                panic!("large-output run must not time out (would indicate pipe deadlock)")
+            }
+        }
+    }
+
+    #[test]
+    fn run_with_timeout_captures_large_stderr_without_deadlock() {
+        // Same as the stdout test but writes >= 1 MB to stderr. The stderr
+        // drain thread must keep that pipe empty too, or the child would
+        // block and we would time out.
+        let line = if cfg!(windows) {
+            // Write the marker then ~1MB of filler to stderr (1>&2).
+            "for /L %i in (1,1,1100) do @echo BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB 1>&2"
+        } else {
+            "yes B 1>&2 | head -c 1100000"
+        };
+        let cmd = shell_command(line);
+        let start = std::time::Instant::now();
+        let result = run_with_timeout(cmd, Duration::from_secs(20));
+        let elapsed = start.elapsed();
+
+        match result.expect("large stderr should not error") {
+            TimedOutput::Output(o) => {
+                assert!(
+                    o.stderr.len() >= 1_000_000,
+                    "expected >=1MB stderr captured, got {} bytes",
+                    o.stderr.len()
+                );
+                assert!(
+                    elapsed < Duration::from_secs(15),
+                    "large-stderr run should finish fast (no deadlock), took {elapsed:?}"
+                );
+            }
+            TimedOutput::TimedOut { .. } => {
+                panic!("large-stderr run must not time out (would indicate pipe deadlock)")
+            }
+        }
+    }
+
+    #[test]
+    fn run_with_timeout_drains_stdout_and_stderr_simultaneously() {
+        // Both pipes filled beyond the buffer at the same time. A single
+        // reader thread (or sequential reads) would deadlock on one while
+        // draining the other. The two-thread design keeps both drained.
+        let line = if cfg!(windows) {
+            // Interleave: 1100 lines to stdout (C...) then 1100 to stderr (D...).
+            "(for /L %i in (1,1,1100) do @echo CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC) & (for /L %i in (1,1,1100) do @echo DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD 1>&2)"
+        } else {
+            // Write ~1MB to stdout and ~1MB to stderr concurrently. Run both
+            // writers under a single shell so they share the same lifetime and
+            // both pipes are full at once.
+            "(yes C | head -c 1100000) ; (yes D 1>&2 | head -c 1100000)"
+        };
+        let cmd = shell_command(line);
+        let start = std::time::Instant::now();
+        let result = run_with_timeout(cmd, Duration::from_secs(20));
+        let elapsed = start.elapsed();
+
+        match result.expect("dual large output should not error") {
+            TimedOutput::Output(o) => {
+                assert!(
+                    o.stdout.len() >= 1_000_000,
+                    "expected >=1MB stdout, got {} bytes",
+                    o.stdout.len()
+                );
+                assert!(
+                    o.stderr.len() >= 1_000_000,
+                    "expected >=1MB stderr, got {} bytes",
+                    o.stderr.len()
+                );
+                assert!(
+                    elapsed < Duration::from_secs(15),
+                    "dual-output run should finish fast (no deadlock), took {elapsed:?}"
+                );
+            }
+            TimedOutput::TimedOut { .. } => {
+                panic!("dual-output run must not time out (would indicate pipe deadlock)")
+            }
+        }
+    }
+
+    #[test]
+    fn run_with_timeout_after_partial_output_reports_timeout_not_success() {
+        // Write a marker to stdout, then sleep past the timeout. The helper
+        // must report TimedOut (not treat the partial output as a success),
+        // and the direct child must be killed + reaped.
+        //
+        // Uses a direct process (no shell wrapper) so killing the direct
+        // child closes the pipe and the reader joins promptly. Mirrors the
+        // production shape where the direct child is the PowerShell process.
+        let mut cmd = if cfg!(windows) {
+            // powershell.exe is the direct child; Write-Output flushes to the
+            // pipe, then Start-Sleep keeps it alive past the timeout.
+            let mut c = Command::new("powershell.exe");
+            c.arg("-NoProfile")
+                .arg("-Command")
+                .arg("Write-Output 'PARTIAL-BEFORE-TIMEOUT'; Start-Sleep -Seconds 30");
+            c
+        } else {
+            let mut c = Command::new("sh");
+            c.arg("-c")
+                .arg("printf 'PARTIAL-BEFORE-TIMEOUT\\n'; sleep 30");
+            c
+        };
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let timeout = Duration::from_secs(2);
+        let start = std::time::Instant::now();
+        let result = run_with_timeout(cmd, timeout);
+        let elapsed = start.elapsed();
+
+        match result.expect("partial-then-timeout should not error") {
+            TimedOutput::TimedOut {
+                timeout: t,
+                partial,
+            } => {
+                assert_eq!(t, timeout, "reported timeout should match input");
+                assert!(
+                    elapsed < Duration::from_secs(15),
+                    "should return soon after timeout (kill closes the pipe, reader joins), took {elapsed:?}"
+                );
+                // The partial marker should have been drained before the kill.
+                let out = String::from_utf8_lossy(&partial.stdout);
+                assert!(
+                    out.contains("PARTIAL-BEFORE-TIMEOUT"),
+                    "partial stdout should contain the marker written before timeout, got: {out}"
+                );
+            }
+            TimedOutput::Output(_) => {
+                panic!("must report timeout, not success, even with partial output")
+            }
+        }
+    }
+
+    #[test]
+    fn powershell_action_timeout_is_fifteen_minutes() {
+        // Pin the configured timeout so a future change is conscious.
+        assert_eq!(POWERSHELL_ACTION_TIMEOUT, Duration::from_secs(15 * 60));
     }
 }
 
