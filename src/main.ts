@@ -52,52 +52,54 @@ app.innerHTML = `
 
     <section class="composer">
       <div class="bulk-label-row">
-        <label for="bulk-input">Email List</label>
-        <span id="bulk-count" class="bulk-count-circle is-empty" title="Total emails in list">0</span>
+        <span id="bulk-label">Email List</span>
+        <span id="bulk-count" class="bulk-count-circle is-empty" title="Total emails in list" role="status" aria-label="Email count">0</span>
       </div>
       <div class="bulk-input-wrap">
-        <div id="bulk-input" class="bulk-editable" contenteditable="true" data-placeholder="alice@company.com&#10;bob@company.com"></div>
+        <div id="bulk-input" class="bulk-editable" contenteditable="true" data-placeholder="alice@company.com&#10;bob@company.com" role="textbox" aria-multiline="true" aria-labelledby="bulk-label"></div>
         <button id="clear-bulk-input" class="clear-bulk-input-btn" type="button" aria-label="Clear email list" title="Clear email list">X</button>
       </div>
       <div class="composer-actions">
         <button id="queue-to-add" class="btn solid">Add</button>
-        <span id="add-count" class="pill-count">0</span>
+        <span id="add-count" class="pill-count" role="status" aria-label="Add queue count">0</span>
         <button id="queue-to-remove" class="btn remove-action">Remove</button>
-        <span id="remove-count" class="pill-count pill-remove">0</span>
+        <span id="remove-count" class="pill-count pill-remove" role="status" aria-label="Remove queue count">0</span>
         <button id="clear-queues" class="btn ghost">Clear</button>
         <button id="undo-swap" class="btn ghost">Undo</button>
         <button id="view-log-history" class="btn ghost">View Logs</button>
         <div class="action-spacer"></div>
-        <span id="result-success" class="result-badge success" style="display:none">✓ 0</span>
-        <span id="result-fail" class="result-badge fail" style="display:none">✗ 0</span>
+        <span id="result-success" class="result-badge success" style="display:none" role="status" aria-live="polite" aria-atomic="true" aria-label="Success count">✓ 0</span>
+        <span id="result-fail" class="result-badge fail" style="display:none" role="status" aria-live="polite" aria-atomic="true" aria-label="Failure count">✗ 0</span>
       </div>
     </section>
 
-    <section class="board" id="board">
-      <article class="lane">
+    <section class="board" id="board" aria-label="Email queues">
+      <article class="lane" aria-label="Add queue">
         <div class="lane-head">
           <button id="run-add" class="btn solid lane-run-btn">▶ Run</button>
         </div>
-        <ul id="add-zone" data-list="add" class="drop-list"></ul>
+        <ul id="add-zone" data-list="add" class="drop-list" role="list" aria-label="Add queue items"></ul>
       </article>
 
-      <article class="lane remove">
+      <article class="lane remove" aria-label="Remove queue">
         <div class="lane-head">
           <button id="run-remove" class="btn danger lane-run-btn">▶ Run</button>
         </div>
-        <ul id="remove-zone" data-list="remove" class="drop-list"></ul>
+        <ul id="remove-zone" data-list="remove" class="drop-list" role="list" aria-label="Remove queue items"></ul>
       </article>
     </section>
 
     <section class="progress-section" id="progress-section" style="display:none;">
       <div class="progress-header">
-        <span id="progress-label" class="progress-label">Processing…</span>
+        <span id="progress-label" class="progress-label" role="status" aria-live="polite" aria-atomic="true">Processing…</span>
         <span id="progress-percent" class="progress-percent"></span>
       </div>
       <div class="progress-track">
-        <div id="progress-fill" class="progress-fill" style="width:0%"></div>
+        <div id="progress-fill" class="progress-fill" style="width:0%" role="progressbar" aria-label="Action progress"></div>
       </div>
     </section>
+
+    <div id="alert-region" role="alert" aria-live="assertive" class="sr-only"></div>
 
     <section class="result-table-section" id="result-table-section" style="display:none;">
       <h3>Result Details</h3>
@@ -120,10 +122,10 @@ app.innerHTML = `
       <pre id="log-box"></pre>
     </section>
 
-    <section id="history-modal" class="history-modal hidden" aria-hidden="true">
+    <section id="history-modal" class="history-modal hidden" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="history-title">
       <div class="history-modal-inner">
         <div class="history-head">
-          <h3>Logs History</h3>
+          <h3 id="history-title">Logs History</h3>
           <div class="history-actions">
             <button id="clear-log-history" class="btn ghost">Clear History</button>
             <button id="close-log-history" class="btn outline">Close</button>
@@ -165,6 +167,7 @@ const historyModal = document.querySelector<HTMLElement>("#history-modal")!;
 const historyBox = document.querySelector<HTMLPreElement>("#history-box")!;
 const closeLogHistoryBtn = document.querySelector<HTMLButtonElement>("#close-log-history")!;
 const clearLogHistoryBtn = document.querySelector<HTMLButtonElement>("#clear-log-history")!;
+const alertRegion = document.querySelector<HTMLElement>("#alert-region")!;
 const clearBulkInputBtn = document.querySelector<HTMLButtonElement>("#clear-bulk-input")!;
 
 let isBusy = false;
@@ -220,15 +223,49 @@ function renderLogHistory(): void {
     : "No logs history yet.";
 }
 
+let modalOpener: HTMLElement | null = null;
+
 function openLogHistory(): void {
+  modalOpener = document.activeElement as HTMLElement;
   renderLogHistory();
   historyModal.classList.remove("hidden");
   historyModal.setAttribute("aria-hidden", "false");
+  // Focus the Close button so the user lands inside the dialog.
+  closeLogHistoryBtn.focus();
 }
 
 function closeLogHistory(): void {
   historyModal.classList.add("hidden");
   historyModal.setAttribute("aria-hidden", "true");
+  // Restore focus to the element that opened the modal.
+  modalOpener?.focus();
+  modalOpener = null;
+}
+
+/** Trap Tab/Shift+Tab within the history modal so focus cannot escape. */
+function trapModalFocus(event: KeyboardEvent): void {
+  if (historyModal.classList.contains("hidden")) return;
+  if (event.key !== "Tab") return;
+
+  const focusable = historyModal.querySelectorAll<HTMLElement>(
+    'button, [href], input, [tabindex]:not([tabindex="-1"])'
+  );
+  if (focusable.length === 0) return;
+
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+
+  if (event.shiftKey) {
+    if (document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    }
+  } else {
+    if (document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
 }
 
 function clearLogHistory(): void {
@@ -246,7 +283,13 @@ function log(message: string, error = false): void {
     logHistory.length = LOG_HISTORY_MAX_LINES;
   }
   saveLogHistory(logHistory);
-  if (error) logBox.classList.add("error");
+  if (error) {
+    logBox.classList.add("error");
+    // Announce blocking errors via the assertive alert region.
+    alertRegion.textContent = message;
+  } else {
+    logBox.classList.remove("error");
+  }
 }
 
 function updateCounts(): void {
@@ -261,12 +304,14 @@ function updateRunButtonStates(busy = isBusy): void {
 
 function renderZone(target: QueueName): void {
   const zone = target === "add" ? addZone : removeZone;
+  const otherLabel = target === "add" ? "Remove" : "Add";
+  const arrowDir = target === "add" ? "Right" : "Left";
   const items = state[target]
     .map(
       (email) => `
-        <li class="email-item" draggable="true" data-email="${escapeHtml(email)}" data-source="${target}">
+        <li class="email-item" draggable="true" tabindex="0" data-email="${escapeHtml(email)}" data-source="${target}" role="listitem" aria-label="${escapeHtml(email)} in ${target} queue. Press Arrow ${arrowDir} to move to ${otherLabel} queue.">
           <span>${escapeHtml(email)}</span>
-          <button class="delete-btn" data-email="${escapeHtml(email)}" data-source="${target}" title="Remove from queue">x</button>
+          <button class="delete-btn" data-email="${escapeHtml(email)}" data-source="${target}" title="Remove from queue" aria-label="Remove ${escapeHtml(email)} from ${target} queue">x</button>
         </li>
       `
     )
@@ -528,6 +573,7 @@ function setBusy(value: boolean): void {
   ].forEach((el) => {
     el.disabled = effectivelyBusy;
   });
+  boardSection.setAttribute("aria-busy", String(value));
   updateRunButtonStates();
 }
 function bindDynamicEvents(): void {
@@ -539,6 +585,26 @@ function bindDynamicEvents(): void {
       event.dataTransfer.effectAllowed = "move";
       event.dataTransfer.setData("text/plain", email);
       event.dataTransfer.setData("application/x-source", source);
+    });
+
+    // Keyboard equivalent for drag-and-drop: Arrow keys move email between queues.
+    item.addEventListener("keydown", async (event: KeyboardEvent) => {
+      if (!requireMutationsAllowed()) return;
+      const email = item.dataset.email ?? "";
+      const source = item.dataset.source as QueueName;
+      if (!email || (source !== "add" && source !== "remove")) return;
+
+      const target: QueueName | null =
+        event.key === "ArrowRight" && source === "add" ? "remove"
+        : event.key === "ArrowLeft" && source === "remove" ? "add"
+        : null;
+
+      if (!target) return;
+      event.preventDefault();
+      moveEmail(email, source, target);
+      render();
+      await persistQueues();
+      log(`Moved ${email} to ${target.toUpperCase()} queue.`);
     });
   });
 
@@ -650,6 +716,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !historyModal.classList.contains("hidden")) {
     closeLogHistory();
   }
+  trapModalFocus(event);
 });
 
 // ── Init ──────────────────────────────────────────────────────────
