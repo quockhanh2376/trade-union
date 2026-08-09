@@ -620,6 +620,21 @@ async fn run_group_action(
     .map_err(|err| format!("Background task failed: {err}"))?
 }
 
+fn main() {
+    tauri::Builder::default()
+        .setup(|app| {
+            let _ = clear_legacy_saved_admin_credential_file(app.handle());
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            load_seed_emails,
+            save_email_queues,
+            run_group_action
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1015,19 +1030,4 @@ mod tests {
         // Pin the configured timeout so a future change is conscious.
         assert_eq!(POWERSHELL_ACTION_TIMEOUT, Duration::from_secs(15 * 60));
     }
-}
-
-fn main() {
-    tauri::Builder::default()
-        .setup(|app| {
-            let _ = clear_legacy_saved_admin_credential_file(app.handle());
-            Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
-            load_seed_emails,
-            save_email_queues,
-            run_group_action
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
 }
