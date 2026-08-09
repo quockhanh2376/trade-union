@@ -270,28 +270,6 @@ body {
   flex: 1;
 }
 
-.composer textarea {
-  width: 100%;
-  min-height: 100px;
-  max-height: 200px;
-  resize: vertical;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 10px;
-  font-family: "Consolas", "Cascadia Mono", monospace;
-  background: var(--bg-2);
-  color: var(--text);
-  outline: none;
-  column-count: 2;
-  column-gap: 20px;
-  line-height: 1.6;
-}
-
-.composer textarea:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--glow);
-}
-
 /* ── Result badges ──────────────────────────────────────────────── */
 
 .result-badge {
@@ -365,11 +343,6 @@ body {
   justify-content: flex-start;
 }
 
-.lane-head h2 {
-  margin: 0;
-  font-size: 1.1rem;
-}
-
 .lane-run-btn {
   width: 140px;
   margin: 0;
@@ -379,12 +352,6 @@ body {
   letter-spacing: 0.04em;
   border-radius: 999px;
   text-align: center;
-}
-
-.lane-hint {
-  margin: 0;
-  color: var(--text-soft);
-  font-size: 0.88rem;
 }
 
 .pill-count {
@@ -686,13 +653,6 @@ body {
 
 .btn.danger:hover:not(:disabled) {
   background: var(--danger-strong);
-}
-
-.btn.wide {
-  width: 100%;
-  padding: 14px 12px;
-  font-size: 1.05rem;
-  letter-spacing: 0.03em;
 }
 
 /* ── Activity log ───────────────────────────────────────────────── */
