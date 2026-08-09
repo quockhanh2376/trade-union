@@ -183,28 +183,30 @@ test("Async ordering: helper awaits the loader before resolving", async () => {
 // than executing the handler. A future regression that removes a guard
 // will fail here.
 
-test("Guard: delete-btn handler checks loadFailed before mutating", () => {
+test("Guard: delete-btn handler guards before mutating (F-08 covers busy + loadFailed)", () => {
   const block = extractFunction(mainSource, "bindDynamicEvents");
   assert.ok(block, "bindDynamicEvents body not found");
-  // The delete click handler must bail out when loadFailed is true.
-  assert.match(block, /button\.addEventListener\("click", async \(\) => \{[\s\S]*?if \(loadFailed\) return;/);
+  // F-08: the delete click handler must call the unified guard before
+  // mutating. requireMutationsAllowed covers both busy and loadFailed.
+  assert.match(block, /button\.addEventListener\("click", async \(\) => \{[\s\S]*?requireMutationsAllowed\(\)/);
 });
 
-test("Guard: drop handler checks loadFailed before mutating", () => {
+test("Guard: drop handler guards before mutating (F-08 covers busy + loadFailed)", () => {
   const block = extractFunction(mainSource, "wireDropZone");
   assert.ok(block, "wireDropZone body not found");
-  assert.match(block, /zone\.addEventListener\("drop", async \(event\) => \{[\s\S]*?if \(loadFailed\) return;/);
+  assert.match(block, /zone\.addEventListener\("drop", async \(event\) => \{[\s\S]*?requireMutationsAllowed\(\)/);
 });
 
-test("Guard: runAction checks loadFailed at entry", () => {
+test("Guard: runAction guards at entry with canStartRun (F-07 double-run)", () => {
   const block = extractFunction(mainSource, "runAction");
   assert.ok(block, "runAction body not found");
-  // The guard must appear before the first state read (payload snapshot).
-  const guardIdx = block.indexOf("if (loadFailed)");
+  // F-07: the run-entry guard (canStartRun, covering busy + loadFailed) must
+  // appear before the payload snapshot so a blocked call has no side effects.
+  const guardIdx = block.indexOf("canStartRun(guardState())");
   const payloadIdx = block.indexOf("const payload =");
-  assert.ok(guardIdx !== -1, "runAction must contain a loadFailed guard");
+  assert.ok(guardIdx !== -1, "runAction must call canStartRun at entry");
   assert.ok(payloadIdx !== -1, "runAction must snapshot payload");
-  assert.ok(guardIdx < payloadIdx, "loadFailed guard must precede payload snapshot");
+  assert.ok(guardIdx < payloadIdx, "canStartRun guard must precede payload snapshot");
 });
 
 test("Guard: setBusy keeps controls locked when loadFailed is true", () => {
