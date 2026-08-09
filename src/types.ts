@@ -15,9 +15,11 @@ export interface GroupRunResult {
   stderr: string;
 }
 
+export type ActionStatus = "ok" | "fail";
+
 export interface ActionDetail {
   email: string;
   group: string;
-  status: string;
+  status: ActionStatus;
   message?: string;
 }

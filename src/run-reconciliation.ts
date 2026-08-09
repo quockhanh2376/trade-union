@@ -1,13 +1,11 @@
-import type { ActionDetail, QueueName } from "./types.ts";
+import type { ActionDetail, ActionStatus, QueueName } from "./types.ts";
 import { normalizeEmail } from "./email.ts";
 
 /**
- * Internal status used to classify an ActionDetail result.
+ * Internal status classification for an ActionDetail result.
  * Mirrors the runtime normalization done in main.ts's normalizeStatus().
  */
-type Status = "ok" | "fail";
-
-function classifyStatus(raw: string): Status {
+function classifyStatus(raw: string): ActionStatus {
   return raw.trim().toLowerCase() === "ok" ? "ok" : "fail";
 }
 
