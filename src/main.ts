@@ -178,6 +178,13 @@ let isBusy = false;
  */
 let loadFailed = false;
 
+/**
+ * Debounce delay for the bulk-count update (F-15). The `input` event fires on
+ * every keystroke; parsing all emails each time is O(N²) for a burst of typing.
+ * We defer the parse until the user pauses for this many milliseconds.
+ */
+const BULK_COUNT_DEBOUNCE_MS = 150;
+let bulkCountTimer: ReturnType<typeof setTimeout> | null = null;
 /** Snapshot of the guard flags, consumed by the pure guard helpers (F-07/F-08). */
 function guardState() {
   return { busy: isBusy, loadFailed };
@@ -208,13 +215,42 @@ function clearBulkInput(): void {
   bulkInput.textContent = "";
   clearBulkInputFromSession();
   bulkInput.focus();
-  updateBulkCount();
+  flushBulkCount();
 }
 
 function updateBulkCount(): void {
   const count = parseEmails(bulkInput.innerText).length;
   bulkCount.textContent = String(count);
   bulkCount.classList.toggle("is-empty", count === 0);
+}
+
+/**
+ * Schedule a debounced bulk-count update (F-15). If called again before the
+ * timer fires, the previous timer is cancelled — only the latest content is
+ * parsed. Call `flushBulkCount()` to force an immediate update (used by
+ * Clear, Add/Remove, init) so stale timers cannot overwrite fresh UI state.
+ */
+function scheduleBulkCount(): void {
+  if (bulkCountTimer !== null) {
+    clearTimeout(bulkCountTimer);
+  }
+  bulkCountTimer = setTimeout(() => {
+    bulkCountTimer = null;
+    updateBulkCount();
+  }, BULK_COUNT_DEBOUNCE_MS);
+}
+
+/**
+ * Cancel any pending debounced count update and run it immediately with the
+ * current content. This prevents stale timers from overwriting fresh state
+ * after Clear, Add/Remove, or init.
+ */
+function flushBulkCount(): void {
+  if (bulkCountTimer !== null) {
+    clearTimeout(bulkCountTimer);
+    bulkCountTimer = null;
+  }
+  updateBulkCount();
 }
 
 function renderLogHistory(): void {
@@ -443,7 +479,7 @@ async function queueFromInput(target: QueueName): Promise<void> {
   ensureInQueue(target, emails);
   // Auto-sort, deduplicate, and remove blank entries from the input area
   bulkInput.textContent = sanitizeEmailInput(bulkInput.innerText);
-  updateBulkCount();
+  flushBulkCount();
   render();
   await persistQueues();
   log(`Queued ${emails.length} email(s) into ${target.toUpperCase()}.`);
@@ -455,7 +491,7 @@ async function clearQueues(): Promise<void> {
   state.add = [];
   state.remove = [];
   bulkInput.textContent = "";
-  updateBulkCount();
+  flushBulkCount();
   renderResultDetails([]);
   clearBulkInputFromSession();
   resultSuccess.style.display = "none";
@@ -658,7 +694,7 @@ function wireDropZone(zone: HTMLUListElement, target: QueueName): void {
 async function initializeQueues(): Promise<void> {
   // Restore the bulk-input draft (session-only, never persisted to the backend)
   bulkInput.textContent = loadBulkInputFromSession();
-  updateBulkCount();
+  flushBulkCount();
 
   // Load persisted queue state from the backend before touching it.
   // The resolver never persists; on load failure it returns the empty default
@@ -714,7 +750,7 @@ adminUpnInput.addEventListener("change", () => {
 
 bulkInput.addEventListener("input", () => {
   saveBulkInputToSession(bulkInput.innerText);
-  updateBulkCount();
+  scheduleBulkCount();
 });
 
 historyModal.addEventListener("click", (event) => {
