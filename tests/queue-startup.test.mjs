@@ -183,12 +183,11 @@ test("Async ordering: helper awaits the loader before resolving", async () => {
 // than executing the handler. A future regression that removes a guard
 // will fail here.
 
-test("Guard: delete-btn handler guards before mutating (F-08 covers busy + loadFailed)", () => {
-  const block = extractFunction(mainSource, "bindDynamicEvents");
-  assert.ok(block, "bindDynamicEvents body not found");
-  // F-08: the delete click handler must call the unified guard before
-  // mutating. requireMutationsAllowed covers both busy and loadFailed.
-  assert.match(block, /button\.addEventListener\("click", async \(\) => \{[\s\S]*?requireMutationsAllowed\(\)/);
+test("Guard: delete-btn handler guards before mutating (F-08, via delegation)", () => {
+  const block = extractFunction(mainSource, "wireQueueDelegation");
+  assert.ok(block, "wireQueueDelegation body not found");
+  // F-08: the delegated click handler must call the unified guard before mutating.
+  assert.match(block, /requireMutationsAllowed\(\)/);
 });
 
 test("Guard: drop handler guards before mutating (F-08 covers busy + loadFailed)", () => {

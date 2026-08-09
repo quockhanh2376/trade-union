@@ -324,7 +324,6 @@ function render(): void {
   renderZone("remove");
   updateCounts();
   updateRunButtonStates();
-  bindDynamicEvents();
 }
 
 function normalizeStatus(value: string): "ok" | "fail" {
@@ -576,48 +575,60 @@ function setBusy(value: boolean): void {
   boardSection.setAttribute("aria-busy", String(value));
   updateRunButtonStates();
 }
-function bindDynamicEvents(): void {
-  document.querySelectorAll<HTMLLIElement>(".email-item").forEach((item) => {
-    item.addEventListener("dragstart", (event: DragEvent) => {
-      const email = item.dataset.email ?? "";
-      const source = item.dataset.source ?? "";
-      if (!email || !event.dataTransfer) return;
-      event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData("text/plain", email);
-      event.dataTransfer.setData("application/x-source", source);
-    });
-
-    // Keyboard equivalent for drag-and-drop: Arrow keys move email between queues.
-    item.addEventListener("keydown", async (event: KeyboardEvent) => {
-      if (!requireMutationsAllowed()) return;
-      const email = item.dataset.email ?? "";
-      const source = item.dataset.source as QueueName;
-      if (!email || (source !== "add" && source !== "remove")) return;
-
-      const target: QueueName | null =
-        event.key === "ArrowRight" && source === "add" ? "remove"
-        : event.key === "ArrowLeft" && source === "remove" ? "add"
-        : null;
-
-      if (!target) return;
-      event.preventDefault();
-      moveEmail(email, source, target);
-      render();
-      await persistQueues();
-      log(`Moved ${email} to ${target.toUpperCase()} queue.`);
-    });
+/**
+ * Wire delegated event listeners on each queue zone (called ONCE at init,
+ * not on every render). This replaces the old bindDynamicEvents() pattern
+ * that re-attached N listeners per queue item on every render call (F-14).
+ *
+ * Delegation: 2 listeners total (one per <ul>), regardless of queue size.
+ * Event target is resolved via closest() to find the originating item/button.
+ */
+function wireQueueDelegation(zone: HTMLUListElement): void {
+  // Drag start — delegated to zone, finds the originating .email-item
+  zone.addEventListener("dragstart", (event: DragEvent) => {
+    const item = (event.target as HTMLElement)?.closest<HTMLLIElement>(".email-item");
+    if (!item || !event.dataTransfer) return;
+    const email = item.dataset.email ?? "";
+    const source = item.dataset.source ?? "";
+    if (!email) return;
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", email);
+    event.dataTransfer.setData("application/x-source", source);
   });
 
-  document.querySelectorAll<HTMLButtonElement>(".delete-btn").forEach((button) => {
-    button.addEventListener("click", async () => {
-      if (!requireMutationsAllowed()) return;
-      const email = button.dataset.email ?? "";
-      const source = button.dataset.source as QueueName;
-      if (!email || (source !== "add" && source !== "remove")) return;
-      removeFromQueue(source, email);
-      render();
-      await persistQueues();
-    });
+  // Keyboard move — delegated to zone, finds the originating .email-item
+  zone.addEventListener("keydown", async (event: KeyboardEvent) => {
+    const item = (event.target as HTMLElement)?.closest<HTMLLIElement>(".email-item");
+    if (!item) return;
+    if (!requireMutationsAllowed()) return;
+    const email = item.dataset.email ?? "";
+    const source = item.dataset.source as QueueName;
+    if (!email || (source !== "add" && source !== "remove")) return;
+
+    const target: QueueName | null =
+      event.key === "ArrowRight" && source === "add" ? "remove"
+      : event.key === "ArrowLeft" && source === "remove" ? "add"
+      : null;
+
+    if (!target) return;
+    event.preventDefault();
+    moveEmail(email, source, target);
+    render();
+    await persistQueues();
+    log(`Moved ${email} to ${target.toUpperCase()} queue.`);
+  });
+
+  // Delete click — delegated to zone, finds the originating .delete-btn
+  zone.addEventListener("click", async (event: MouseEvent) => {
+    const button = (event.target as HTMLElement)?.closest<HTMLButtonElement>(".delete-btn");
+    if (!button) return;
+    if (!requireMutationsAllowed()) return;
+    const email = button.dataset.email ?? "";
+    const source = button.dataset.source as QueueName;
+    if (!email || (source !== "add" && source !== "remove")) return;
+    removeFromQueue(source, email);
+    render();
+    await persistQueues();
   });
 }
 
@@ -730,6 +741,8 @@ window.addEventListener("beforeunload", () => {
 
 wireDropZone(addZone, "add");
 wireDropZone(removeZone, "remove");
+wireQueueDelegation(addZone);
+wireQueueDelegation(removeZone);
 renderLogHistory();
 void initializeQueues();
 

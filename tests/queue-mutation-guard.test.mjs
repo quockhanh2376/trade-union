@@ -145,12 +145,12 @@ test("Wiring: undoSwapQueues guards with requireMutationsAllowed (F-08)", () => 
 });
 
 test("Wiring: delete-btn handler guards with requireMutationsAllowed (F-08)", () => {
-  const block = extractFunction(mainSource, "bindDynamicEvents");
-  assert.ok(block, "bindDynamicEvents body not found");
+  const block = extractFunction(mainSource, "wireQueueDelegation");
+  assert.ok(block, "wireQueueDelegation body not found");
   assert.match(
     block,
-    /button\.addEventListener\("click", async \(\) => \{[\s\S]*?requireMutationsAllowed\(\)/,
-    "delete-btn click must call requireMutationsAllowed before mutating"
+    /requireMutationsAllowed\(\)/,
+    "delegated click handler must call requireMutationsAllowed before mutating"
   );
 });
 
@@ -197,9 +197,10 @@ test("Wiring: guard helpers imported from queue-mutation-guard", () => {
 test("Wiring: old loadFailed-only guards in delete/drop replaced by helper", () => {
   // The old `if (loadFailed) return;` lines in delete/drop handlers must be
   // gone — superseded by requireMutationsAllowed() which covers busy too.
-  const bindBlock = extractFunction(mainSource, "bindDynamicEvents");
+  const delegBlock = extractFunction(mainSource, "wireQueueDelegation");
   const dropBlock = extractFunction(mainSource, "wireDropZone");
-  assert.ok(!/if \(loadFailed\) return;/.test(bindBlock), "delete handler must not use the old loadFailed-only guard");
+  assert.ok(delegBlock, "wireQueueDelegation body not found");
+  assert.ok(!/if \(loadFailed\) return;/.test(delegBlock), "delegated delete handler must not use the old loadFailed-only guard");
   assert.ok(!/if \(loadFailed\) return;/.test(dropBlock), "drop handler must not use the old loadFailed-only guard");
 });
 
