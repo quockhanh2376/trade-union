@@ -24,6 +24,7 @@ import {
 import { state, ensureInQueue, removeFromQueue, moveEmail } from "./queue.ts";
 import { resolveInitialQueues } from "./queue-startup.ts";
 import { resolveRemovableEmails } from "./run-reconciliation.ts";
+import { canMutateQueues, canStartRun, blockReason } from "./queue-mutation-guard.ts";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) {
@@ -173,6 +174,24 @@ let isBusy = false;
  * user must restart the app to retry the load. (F-02 load-failure safety.)
  */
 let loadFailed = false;
+
+/** Snapshot of the guard flags, consumed by the pure guard helpers (F-07/F-08). */
+function guardState() {
+  return { busy: isBusy, loadFailed };
+}
+
+/** Returns true when queue mutations / runs are allowed right now. */
+function mutationsAllowed(): boolean {
+  return canMutateQueues(guardState());
+}
+
+/** Logs the block reason (if any) and returns false when blocked. */
+function requireMutationsAllowed(): boolean {
+  if (mutationsAllowed()) return true;
+  const reason = blockReason(guardState());
+  if (reason) log(reason, true);
+  return false;
+}
 
 const logHistory = loadLogHistory();
 
@@ -371,6 +390,7 @@ async function persistQueues(): Promise<void> {
 }
 
 async function queueFromInput(target: QueueName): Promise<void> {
+  if (!requireMutationsAllowed()) return;
   const emails = parseEmails(bulkInput.innerText);
   if (!emails.length) {
     log("No valid emails found in the input area.", true);
@@ -387,6 +407,7 @@ async function queueFromInput(target: QueueName): Promise<void> {
 }
 
 async function clearQueues(): Promise<void> {
+  if (!requireMutationsAllowed()) return;
   state.add = [];
   state.remove = [];
   bulkInput.textContent = "";
@@ -402,6 +423,7 @@ async function clearQueues(): Promise<void> {
 }
 
 async function undoSwapQueues(): Promise<void> {
+  if (!requireMutationsAllowed()) return;
   const prevAdd = [...state.add];
   state.add = [...state.remove].sort();
   state.remove = prevAdd.sort();
@@ -412,8 +434,11 @@ async function undoSwapQueues(): Promise<void> {
 
 // ── Run action ────────────────────────────────────────────────────
 async function runAction(action: QueueName): Promise<void> {
-  if (loadFailed) {
-    log("Queues are read-only because the saved state could not be loaded. Restart the app to retry.", true);
+  // F-07: reject a second concurrent run (double-click, Add+Remove overlap).
+  // Checked before any state is snapshotted so a blocked call has no side
+  // effects.
+  if (!canStartRun(guardState())) {
+    log(blockReason(guardState()) ?? "Cannot start an action right now.", true);
     return;
   }
   const payload = [...state[action]];
@@ -519,7 +544,7 @@ function bindDynamicEvents(): void {
 
   document.querySelectorAll<HTMLButtonElement>(".delete-btn").forEach((button) => {
     button.addEventListener("click", async () => {
-      if (loadFailed) return;
+      if (!requireMutationsAllowed()) return;
       const email = button.dataset.email ?? "";
       const source = button.dataset.source as QueueName;
       if (!email || (source !== "add" && source !== "remove")) return;
@@ -541,7 +566,7 @@ function wireDropZone(zone: HTMLUListElement, target: QueueName): void {
   zone.addEventListener("drop", async (event) => {
     event.preventDefault();
     zone.classList.remove("drop-hover");
-    if (loadFailed) return;
+    if (!requireMutationsAllowed()) return;
     const email = event.dataTransfer?.getData("text/plain") ?? "";
     const sourceRaw = event.dataTransfer?.getData("application/x-source") ?? "";
     const source = sourceRaw === "add" || sourceRaw === "remove" ? sourceRaw : null;
