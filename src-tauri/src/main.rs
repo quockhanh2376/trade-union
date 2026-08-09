@@ -660,38 +660,46 @@ mod tests {
 
     #[test]
     fn exchange_script_uses_modern_auth_without_password_credentials() {
-        let script = read_workspace_script("manage_distribution_group.ps1");
+        // F-10: the connect-parameter logic (UserPrincipalName handling) now
+        // lives in common.ps1, dot-sourced by manage_distribution_group.ps1.
+        // Assert against common.ps1 for the UPN invariant, and against
+        // manage_distribution_group.ps1 for the no-credential invariant.
+        let common = read_workspace_script("common.ps1");
+        let manage = read_workspace_script("manage_distribution_group.ps1");
 
         assert!(
-            !script.contains("Connect-ExchangeOnline -Credential"),
+            !common.contains("Connect-ExchangeOnline -Credential"),
             "Exchange Online auth must not use password credential auth because it breaks MFA accounts"
         );
         assert!(
-            script.contains("UserPrincipalName = $AdminAccount")
-                || script.contains("params.UserPrincipalName = $AdminAccount"),
-            "admin UPN should be passed into the modern Exchange Online sign-in prompt"
+            !manage.contains("Connect-ExchangeOnline -Credential"),
+            "manage_distribution_group.ps1 must not use password credential auth"
+        );
+        assert!(
+            common.contains("UserPrincipalName = $AdminAccount")
+                || common.contains("params.UserPrincipalName = $AdminAccount"),
+            "common.ps1 should pass admin UPN into the modern Exchange Online sign-in prompt"
         );
     }
 
     #[test]
     fn exchange_scripts_disable_wam_when_hidden_powershell_can_block_auth_ui() {
-        for file_name in ["manage_distribution_group.ps1", "detect_group_type.ps1"] {
-            let script = read_workspace_script(file_name);
-            if !script.contains("Connect-ExchangeOnline") {
-                continue;
-            }
-
+        // F-10: the shared connect-parameter logic (including the DisableWAM
+        // guard) now lives in common.ps1, dot-sourced by both production
+        // scripts. Assert the invariant against common.ps1.
+        let script = read_workspace_script("common.ps1");
+        if script.contains("Connect-ExchangeOnline") {
             assert!(
                 script.contains("Parameters.ContainsKey(\"DisableWAM\")"),
-                "{file_name} should guard DisableWAM for older ExchangeOnlineManagement versions"
+                "common.ps1 should guard DisableWAM for older ExchangeOnlineManagement versions"
             );
             assert!(
                 script.contains("DisableWAM"),
-                "{file_name} should disable WAM so Microsoft sign-in can open while PowerShell is hidden"
+                "common.ps1 should disable WAM so Microsoft sign-in can open while PowerShell is hidden"
             );
             assert!(
                 !script.contains("Connect-ExchangeOnline -ShowBanner:$false"),
-                "{file_name} should connect via splatted parameters so DisableWAM is applied consistently"
+                "common.ps1 should connect via splatted parameters so DisableWAM is applied consistently"
             );
         }
     }

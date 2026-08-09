@@ -8,37 +8,8 @@ param(
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
-function Add-BundledExchangeModulePath {
-    param([string]$Path)
-
-    if ([string]::IsNullOrWhiteSpace($Path)) {
-        return
-    }
-    if (-not (Test-Path -Path $Path -PathType Container)) {
-        return
-    }
-    if (-not (Test-Path -Path (Join-Path -Path $Path -ChildPath "ExchangeOnlineManagement") -PathType Container)) {
-        return
-    }
-
-    $pathSeparator = [System.IO.Path]::PathSeparator
-    $existingPaths = @($env:PSModulePath -split [regex]::Escape($pathSeparator)) | Where-Object {
-        -not [string]::IsNullOrWhiteSpace($_) -and $_ -ne $Path
-    }
-    $env:PSModulePath = (@($Path) + $existingPaths) -join $pathSeparator
-}
-
-function Ensure-ExchangeModule {
-    param([string]$ModulePath)
-
-    Add-BundledExchangeModulePath -Path $ModulePath
-
-    if (-not (Get-Module -ListAvailable -Name ExchangeOnlineManagement)) {
-        Install-Module -Name ExchangeOnlineManagement -Scope CurrentUser -Force -AllowClobber
-    }
-
-    Import-Module ExchangeOnlineManagement -ErrorAction Stop
-}
+# Shared helpers (F-10 dedup): module loading + Exchange connect parameters.
+. "$PSScriptRoot/common.ps1"
 
 function Resolve-GroupType {
     param([string]$RawType)
@@ -50,20 +21,6 @@ function Resolve-GroupType {
         "MailUniversalDistributionGroup|DynamicDistributionGroup" { return "Distribution" }
         default { return "Unknown" }
     }
-}
-
-function Get-ExchangeConnectParameters {
-    $params = @{
-        ShowBanner = $false
-        ErrorAction = "Stop"
-    }
-
-    $connectCommand = Get-Command Connect-ExchangeOnline -ErrorAction Stop
-    if ($connectCommand.Parameters.ContainsKey("DisableWAM")) {
-        $params.DisableWAM = $true
-    }
-
-    return $params
 }
 
 try {
