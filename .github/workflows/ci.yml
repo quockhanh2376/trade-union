@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build frontend (tsc + vite)
+        run: npm run build
+
+      - name: Run Node tests (contract)
+        run: >-
+          node --test
+          tests/clear-bulk-input-ui.test.mjs
+          tests/exchange-module-bundle.test.mjs
+          tests/installer-clean-upgrade.test.mjs
+          tests/csp-config.test.mjs
+          tests/readme-contract.test.mjs
+          tests/accessibility-contract.test.mjs
+          tests/bulk-count-debounce.test.mjs
+          tests/action-status-type.test.mjs
+          tests/ci-workflow.test.mjs
+
+      - name: Run Node tests (behavioral, TS-strip)
+        run: >-
+          node --experimental-strip-types --test
+          tests/email.test.mjs
+          tests/queue.test.mjs
+          tests/run-reconciliation.test.mjs
+          tests/queue-startup.test.mjs
+          tests/queue-mutation-guard.test.mjs
+
+      - name: Cargo check
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
+      - name: Cargo clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Cargo test
+        run: cargo test --manifest-path src-tauri/Cargo.toml
