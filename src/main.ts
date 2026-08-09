@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import "./style.css";
-import type { QueueName, GroupRunResult, ActionDetail, SeedEmails } from "./types.ts";
+import type { QueueName, GroupRunResult, ActionDetail, ActionStatus, SeedEmails } from "./types.ts";
 import { LOG_HISTORY_MAX_LINES } from "./constants.ts";
 import { normalizeEmail, parseEmails, escapeHtml, sanitizeEmailInput } from "./email.ts";
 import {
@@ -362,7 +362,7 @@ function render(): void {
   updateRunButtonStates();
 }
 
-function normalizeStatus(value: string): "ok" | "fail" {
+function normalizeStatus(value: string): ActionStatus {
   return value.trim().toLowerCase() === "ok" ? "ok" : "fail";
 }
 
