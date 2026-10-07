@@ -6,6 +6,8 @@ import {
   BULK_INPUT_SESSION_KEY,
   LOG_HISTORY_MAX_LINES,
   DEFAULT_GROUP_EMAIL,
+  DEFAULT_TARGET_PASSWORD_EMAIL,
+  TARGET_PASSWORD_EMAIL_STORAGE_KEY,
 } from "./constants";
 import { normalizeEmail, parseEmails } from "./email";
 
@@ -90,4 +92,22 @@ export function clearBulkInputFromSession(): void {
   try {
     sessionStorage.removeItem(BULK_INPUT_SESSION_KEY);
   } catch { }
+}
+
+export function loadStoredTargetPasswordEmail(): string {
+  try {
+    const saved = localStorage.getItem(TARGET_PASSWORD_EMAIL_STORAGE_KEY);
+    if (!saved) return DEFAULT_TARGET_PASSWORD_EMAIL;
+    return normalizeEmail(saved) ?? DEFAULT_TARGET_PASSWORD_EMAIL;
+  } catch {
+    return DEFAULT_TARGET_PASSWORD_EMAIL;
+  }
+}
+
+export function saveTargetPasswordEmail(value: string): string {
+  const normalized = normalizeEmail(value) ?? DEFAULT_TARGET_PASSWORD_EMAIL;
+  try {
+    localStorage.setItem(TARGET_PASSWORD_EMAIL_STORAGE_KEY, normalized);
+  } catch { }
+  return normalized;
 }

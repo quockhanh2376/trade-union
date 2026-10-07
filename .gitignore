@@ -41,6 +41,8 @@ emails.txt
 removeemail.txt
 final.txt
 .credentials/
+password.txt
+New Feature/password.txt
 
 # OS files
 Thumbs.db
@@ -55,6 +57,7 @@ Thumbs.db
 
 # Tooling artifacts
 .playwright-mcp/
+.zcode/
 
 # Screenshots
 trade-union-disable-empty-run-buttons.png

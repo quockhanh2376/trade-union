@@ -57,6 +57,25 @@ struct ActionDetail {
     message: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PasswordChangeResult {
+    success: bool,
+    target_email: String,
+    message: String,
+    stdout: String,
+    stderr: String,
+}
+
+#[derive(Deserialize)]
+struct PasswordResultJson {
+    success: bool,
+    #[serde(default)]
+    target_email: String,
+    #[serde(default)]
+    message: String,
+}
+
 fn workspace_root() -> PathBuf {
     if let Ok(path) = std::env::var("TRADE_UNION_ROOT") {
         let value = PathBuf::from(path);
@@ -130,6 +149,39 @@ fn script_path(app: &AppHandle) -> Result<PathBuf, String> {
     }
 
     let dev_path = workspace_script_path();
+    if dev_path.exists() {
+        return Ok(dev_path);
+    }
+
+    Ok(resource_path)
+}
+
+fn change_password_script_path(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Ok(path) = std::env::var("TRADE_UNION_ROOT") {
+        let candidate = PathBuf::from(path)
+            .join("src-tauri")
+            .join("scripts")
+            .join("change_password.ps1");
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    let resource_path = app
+        .path()
+        .resolve(
+            "scripts/change_password.ps1",
+            BaseDirectory::Resource,
+        )
+        .map_err(|err| format!("Cannot resolve bundled PowerShell script: {err}"))?;
+    if resource_path.exists() {
+        return Ok(resource_path);
+    }
+
+    let dev_path = workspace_root()
+        .join("src-tauri")
+        .join("scripts")
+        .join("change_password.ps1");
     if dev_path.exists() {
         return Ok(dev_path);
     }
@@ -298,6 +350,38 @@ fn hidden_powershell_command() -> Command {
     Command::new("powershell")
 }
 
+#[cfg(windows)]
+fn interactive_powershell_command() -> Command {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NEW_CONSOLE: u32 = 0x00000010;
+
+    static PWSH_AVAILABLE: OnceLock<bool> = OnceLock::new();
+    let use_pwsh = *PWSH_AVAILABLE.get_or_init(|| {
+        Command::new("pwsh.exe")
+            .args(["-NoProfile", "-Command", "exit 0"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    });
+
+    let exe = if use_pwsh {
+        "pwsh.exe"
+    } else {
+        "powershell.exe"
+    };
+    let mut cmd = Command::new(exe);
+    cmd.creation_flags(CREATE_NEW_CONSOLE);
+    cmd
+}
+
+#[cfg(not(windows))]
+fn interactive_powershell_command() -> Command {
+    Command::new("powershell")
+}
+
 fn parse_result_json(stdout: &str) -> Option<(usize, usize, usize, Vec<ActionDetail>)> {
     for line in stdout.lines().rev() {
         let trimmed = line.trim();
@@ -309,6 +393,18 @@ fn parse_result_json(stdout: &str) -> Option<(usize, usize, usize, Vec<ActionDet
                     parsed.processed,
                     parsed.details,
                 ));
+            }
+        }
+    }
+    None
+}
+
+fn parse_password_result_json(stdout: &str) -> Option<(bool, String, String)> {
+    for line in stdout.lines().rev() {
+        let trimmed = line.trim();
+        if let Some(json_str) = trimmed.strip_prefix("RESULT_JSON:") {
+            if let Ok(parsed) = serde_json::from_str::<PasswordResultJson>(json_str) {
+                return Some((parsed.success, parsed.target_email, parsed.message));
             }
         }
     }
@@ -620,6 +716,112 @@ async fn run_group_action(
     .map_err(|err| format!("Background task failed: {err}"))?
 }
 
+#[tauri::command]
+async fn change_user_password(
+    app: AppHandle,
+    target_email: String,
+    new_password: String,
+    admin_upn: Option<String>,
+    force_change_next_signin: Option<bool>,
+) -> Result<PasswordChangeResult, String> {
+    let cleaned_target_email = normalize_email(&target_email)
+        .ok_or_else(|| "Invalid target user email.".to_string())?;
+
+    if new_password.trim().len() < 8 {
+        return Err("Password must be at least 8 characters long.".to_string());
+    }
+
+    let cleaned_admin_upn = match admin_upn {
+        Some(value) if !value.trim().is_empty() => Some(
+            normalize_email(&value).ok_or_else(|| "Invalid admin account email.".to_string())?,
+        ),
+        _ => None,
+    };
+
+    let script = change_password_script_path(&app)?;
+    let script_arg = powershell_compatible_path(&script);
+
+    tauri::async_runtime::spawn_blocking(move || {
+        if !script.exists() {
+            return Err(format!("Missing PowerShell script: {}", script.display()));
+        }
+
+        let mut cmd = interactive_powershell_command();
+        cmd.arg("-NoLogo")
+            .arg("-NoProfile")
+            .arg("-WindowStyle")
+            .arg("Minimized")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-File")
+            .arg(script_arg.as_os_str())
+            .arg("-TargetUPN")
+            .arg(&cleaned_target_email)
+            .arg("-NewPassword")
+            .arg(&new_password)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        if let Some(ref upn) = cleaned_admin_upn {
+            cmd.arg("-AdminUPN").arg(upn);
+        }
+
+        if force_change_next_signin.unwrap_or(false) {
+            cmd.arg("-ForceChangePasswordNextSignIn");
+        }
+
+        let output = match run_with_timeout(cmd, POWERSHELL_ACTION_TIMEOUT)? {
+            TimedOutput::Output(o) => o,
+            TimedOutput::TimedOut { partial, timeout } => {
+                let secs = timeout.as_secs();
+                let stdout = String::from_utf8_lossy(&partial.stdout).trim().to_string();
+                let stderr = String::from_utf8_lossy(&partial.stderr).trim().to_string();
+                return Err(build_command_error(
+                    &format!("Password change action timed out after {secs} seconds and was terminated."),
+                    &stdout,
+                    &stderr,
+                ));
+            }
+        };
+
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+        let (success, parsed_email, parsed_msg) = parse_password_result_json(&stdout).unwrap_or((
+            output.status.success(),
+            cleaned_target_email.clone(),
+            if output.status.success() {
+                "Password changed successfully.".to_string()
+            } else {
+                "Failed to change password.".to_string()
+            },
+        ));
+
+        if !output.status.success() && !success && parsed_msg == "Failed to change password." {
+            return Err(build_command_error(
+                &format!("Password change failed: {parsed_msg}"),
+                &stdout,
+                &stderr,
+            ));
+        }
+
+        Ok(PasswordChangeResult {
+            success,
+            target_email: if parsed_email.is_empty() {
+                cleaned_target_email
+            } else {
+                parsed_email
+            },
+            message: parsed_msg,
+            stdout,
+            stderr,
+        })
+    })
+    .await
+    .map_err(|err| format!("Background task failed: {err}"))?
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -629,7 +831,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             load_seed_emails,
             save_email_queues,
-            run_group_action
+            run_group_action,
+            change_user_password
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -717,6 +920,23 @@ mod tests {
                 "common.ps1 should connect via splatted parameters so DisableWAM is applied consistently"
             );
         }
+    }
+
+    #[test]
+    fn change_password_script_uses_modern_auth() {
+        let script = read_workspace_script("change_password.ps1");
+        assert!(
+            script.contains("Connect-MgGraph"),
+            "change_password.ps1 should connect using Connect-MgGraph"
+        );
+        assert!(
+            !script.contains("Connect-MgGraph -Credential"),
+            "change_password.ps1 must not use password credentials"
+        );
+        assert!(
+            script.contains("User.ReadWrite.All"),
+            "change_password.ps1 must request User.ReadWrite.All scope"
+        );
     }
 
     // ── run_with_timeout tests (F-06) ──────────────────────────────

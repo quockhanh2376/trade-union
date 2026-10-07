@@ -23,3 +23,12 @@ export interface ActionDetail {
   status: ActionStatus;
   message?: string;
 }
+
+export interface PasswordChangeResult {
+  success: boolean;
+  targetEmail: string;
+  message: string;
+  stdout: string;
+  stderr: string;
+}
+

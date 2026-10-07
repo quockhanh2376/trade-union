@@ -3,17 +3,19 @@
 A Windows desktop app (Tauri v2) for managing members of Exchange Online
 Distribution Groups via two drag-and-drop queues (Add / Remove).
 
-**Version:** 2.0.5 · **Identifier:** `com.aswhite.tradeunion`
+**Version:** 2.0.6 · **Identifier:** `com.aswhite.tradeunion`
 
 ## Features
 
-- Paste a list of email addresses, then add them to or remove them from one or
-  more Exchange Online distribution groups.
-- Two drag-and-drop queues — **Add** and **Remove** — with live email count,
-  deduplication, sorting, and validation.
+- **Distribution Groups tab:** Paste a list of email addresses, then add them to or
+  remove them from one or more Exchange Online distribution groups via two drag-and-drop
+  queues (**Add** and **Remove**), with live email count, deduplication, sorting, and validation.
+- **Change Password tab:** Directly update passwords for Microsoft 365 accounts
+  via Microsoft Graph PowerShell, with interactive modern auth (MFA supported),
+  minimized background execution, password visibility toggle, and instant feedback.
 - Supports multiple groups per run (comma-separated), processed sequentially
   in the order entered.
-- Queues are persisted across app restarts.
+- Queues and target emails are persisted across app restarts.
 - Bundled offline `ExchangeOnlineManagement` PowerShell module — no internet
   install required on first run.
 - Modern auth (MFA) via Microsoft sign-in prompt. No passwords stored.

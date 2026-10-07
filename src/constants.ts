@@ -7,3 +7,5 @@ export const LOG_HISTORY_STORAGE_KEY = "trade-union.log-history";
 export const BULK_INPUT_SESSION_KEY = "trade-union.bulk-input";
 export const LOG_HISTORY_MAX_LINES = 5000;
 export const AUTH_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+export const DEFAULT_TARGET_PASSWORD_EMAIL = "aswhiteplus@aswhiteglobal.com";
+export const TARGET_PASSWORD_EMAIL_STORAGE_KEY = "trade-union.target-password-email";

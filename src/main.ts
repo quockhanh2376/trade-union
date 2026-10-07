@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import "./style.css";
-import type { QueueName, GroupRunResult, ActionDetail, ActionStatus, SeedEmails } from "./types.ts";
+import type { QueueName, GroupRunResult, ActionDetail, ActionStatus, SeedEmails, PasswordChangeResult } from "./types.ts";
 import { LOG_HISTORY_MAX_LINES } from "./constants.ts";
 import { normalizeEmail, parseEmails, escapeHtml, sanitizeEmailInput } from "./email.ts";
 import {
@@ -14,6 +14,8 @@ import {
   loadBulkInputFromSession,
   saveBulkInputToSession,
   clearBulkInputFromSession,
+  loadStoredTargetPasswordEmail,
+  saveTargetPasswordEmail,
 } from "./storage.ts";
 import {
   hasActiveAuthSession,
@@ -50,72 +52,151 @@ app.innerHTML = `
       </div>
     </header>
 
-    <section class="composer">
-      <div class="bulk-label-row">
-        <span id="bulk-label">Email List</span>
-        <span id="bulk-count" class="bulk-count-circle is-empty" title="Total emails in list" role="status" aria-label="Email count">0</span>
-      </div>
-      <div class="bulk-input-wrap">
-        <div id="bulk-input" class="bulk-editable" contenteditable="true" data-placeholder="alice@company.com&#10;bob@company.com" role="textbox" aria-multiline="true" aria-labelledby="bulk-label"></div>
-        <button id="clear-bulk-input" class="clear-bulk-input-btn" type="button" aria-label="Clear email list" title="Clear email list">X</button>
-      </div>
-      <div class="composer-actions">
-        <button id="queue-to-add" class="btn solid">Add</button>
-        <span id="add-count" class="pill-count" role="status" aria-label="Add queue count">0</span>
-        <button id="queue-to-remove" class="btn remove-action">Remove</button>
-        <span id="remove-count" class="pill-count pill-remove" role="status" aria-label="Remove queue count">0</span>
-        <button id="clear-queues" class="btn ghost">Clear</button>
-        <button id="undo-swap" class="btn ghost">Undo</button>
-        <button id="view-log-history" class="btn ghost">View Logs</button>
-        <div class="action-spacer"></div>
-        <span id="result-success" class="result-badge success" style="display:none" role="status" aria-live="polite" aria-atomic="true" aria-label="Success count">✓ 0</span>
-        <span id="result-fail" class="result-badge fail" style="display:none" role="status" aria-live="polite" aria-atomic="true" aria-label="Failure count">✗ 0</span>
-      </div>
-    </section>
+    <nav class="tab-nav" role="tablist" aria-label="Tool Navigation">
+      <button id="tab-groups-btn" class="tab-btn active" role="tab" aria-selected="true" aria-controls="pane-groups">
+        Distribution Groups
+      </button>
+      <button id="tab-password-btn" class="tab-btn" role="tab" aria-selected="false" aria-controls="pane-password">
+        Change Password
+      </button>
+    </nav>
 
-    <section class="board" id="board" aria-label="Email queues">
-      <article class="lane" aria-label="Add queue">
-        <div class="lane-head">
-          <button id="run-add" class="btn solid lane-run-btn">▶ Run</button>
+    <div id="pane-groups" class="tab-pane active" role="tabpanel" aria-labelledby="tab-groups-btn">
+      <section class="composer">
+        <div class="bulk-label-row">
+          <span id="bulk-label">Email List</span>
+          <span id="bulk-count" class="bulk-count-circle is-empty" title="Total emails in list" role="status" aria-label="Email count">0</span>
         </div>
-        <ul id="add-zone" data-list="add" class="drop-list" role="list" aria-label="Add queue items"></ul>
-      </article>
-
-      <article class="lane remove" aria-label="Remove queue">
-        <div class="lane-head">
-          <button id="run-remove" class="btn danger lane-run-btn">▶ Run</button>
+        <div class="bulk-input-wrap">
+          <div id="bulk-input" class="bulk-editable" contenteditable="true" data-placeholder="alice@company.com&#10;bob@company.com" role="textbox" aria-multiline="true" aria-labelledby="bulk-label"></div>
+          <button id="clear-bulk-input" class="clear-bulk-input-btn" type="button" aria-label="Clear email list" title="Clear email list">X</button>
         </div>
-        <ul id="remove-zone" data-list="remove" class="drop-list" role="list" aria-label="Remove queue items"></ul>
-      </article>
-    </section>
+        <div class="composer-actions">
+          <button id="queue-to-add" class="btn solid">Add</button>
+          <span id="add-count" class="pill-count" role="status" aria-label="Add queue count">0</span>
+          <button id="queue-to-remove" class="btn remove-action">Remove</button>
+          <span id="remove-count" class="pill-count pill-remove" role="status" aria-label="Remove queue count">0</span>
+          <button id="clear-queues" class="btn ghost">Clear</button>
+          <button id="undo-swap" class="btn ghost">Undo</button>
+          <button id="view-log-history" class="btn ghost">View Logs</button>
+          <div class="action-spacer"></div>
+          <span id="result-success" class="result-badge success" style="display:none" role="status" aria-live="polite" aria-atomic="true" aria-label="Success count">✓ 0</span>
+          <span id="result-fail" class="result-badge fail" style="display:none" role="status" aria-live="polite" aria-atomic="true" aria-label="Failure count">✗ 0</span>
+        </div>
+      </section>
 
-    <section class="progress-section" id="progress-section" style="display:none;">
-      <div class="progress-header">
-        <span id="progress-label" class="progress-label" role="status" aria-live="polite" aria-atomic="true">Processing…</span>
-        <span id="progress-percent" class="progress-percent"></span>
-      </div>
-      <div class="progress-track">
-        <div id="progress-fill" class="progress-fill" style="width:0%" role="progressbar" aria-label="Action progress"></div>
-      </div>
-    </section>
+      <section class="board" id="board" aria-label="Email queues">
+        <article class="lane" aria-label="Add queue">
+          <div class="lane-head">
+            <button id="run-add" class="btn solid lane-run-btn">▶ Run</button>
+          </div>
+          <ul id="add-zone" data-list="add" class="drop-list" role="list" aria-label="Add queue items"></ul>
+        </article>
 
-    <div id="alert-region" role="alert" aria-live="assertive" class="sr-only"></div>
+        <article class="lane remove" aria-label="Remove queue">
+          <div class="lane-head">
+            <button id="run-remove" class="btn danger lane-run-btn">▶ Run</button>
+          </div>
+          <ul id="remove-zone" data-list="remove" class="drop-list" role="list" aria-label="Remove queue items"></ul>
+        </article>
+      </section>
 
-    <section class="result-table-section" id="result-table-section" style="display:none;">
-      <h3>Result Details</h3>
-      <div class="result-table-wrap">
-        <table class="result-table">
-          <thead>
-            <tr>
-              <th>Email</th>
-              <th>Group</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody id="result-table-body"></tbody>
-        </table>
-      </div>
-    </section>
+      <section class="progress-section" id="progress-section" style="display:none;">
+        <div class="progress-header">
+          <span id="progress-label" class="progress-label" role="status" aria-live="polite" aria-atomic="true">Processing…</span>
+          <span id="progress-percent" class="progress-percent"></span>
+        </div>
+        <div class="progress-track">
+          <div id="progress-fill" class="progress-fill" style="width:0%" role="progressbar" aria-label="Action progress"></div>
+        </div>
+      </section>
+
+      <div id="alert-region" role="alert" aria-live="assertive" class="sr-only"></div>
+
+      <section class="result-table-section" id="result-table-section" style="display:none;">
+        <h3>Result Details</h3>
+        <div class="result-table-wrap">
+          <table class="result-table">
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Group</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="result-table-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <div id="pane-password" class="tab-pane hidden" role="tabpanel" aria-labelledby="tab-password-btn">
+      <section class="password-card">
+        <div class="password-header">
+          <h2>Change User Password</h2>
+          <p class="section-desc">Change password for a Microsoft 365 / Entra ID user account via Microsoft Graph API (MFA supported).</p>
+        </div>
+
+        <form id="password-form" class="password-form" onsubmit="return false;">
+          <div class="form-group">
+            <label for="target-upn">Target Email:</label>
+            <div class="input-with-action">
+              <input
+                id="target-upn"
+                type="email"
+                placeholder="aswhiteplus@aswhiteglobal.com"
+                autocomplete="off"
+                spellcheck="false"
+                required
+              />
+              <button
+                type="button"
+                id="save-target-upn-btn"
+                class="btn outline btn-save-target"
+                title="Save this email as default"
+                aria-label="Save target email as default"
+              ><span class="save-icon">✓</span> Save</button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="new-password">New Password:</label>
+            <div class="password-input-wrap">
+              <input
+                id="new-password"
+                type="password"
+                placeholder="Enter new password (min 8 characters)"
+                autocomplete="new-password"
+                required
+              />
+              <button
+                type="button"
+                id="toggle-pwd-btn"
+                class="btn ghost toggle-pwd-btn"
+                aria-label="Toggle password visibility"
+                title="Show/Hide password"
+              >👁</button>
+            </div>
+            <span class="field-hint">Must meet Microsoft 365 complexity requirements (min 8 characters).</span>
+          </div>
+
+          <div class="form-group checkbox-group">
+            <label class="checkbox-label" for="force-change-pwd">
+              <input id="force-change-pwd" type="checkbox" />
+              <span>Require user to change password at next sign-in</span>
+            </label>
+          </div>
+
+          <div class="form-actions">
+            <button id="btn-change-password" type="button" class="btn solid password-submit-btn">
+              🔑 Change Password
+            </button>
+            <span id="pwd-status-badge" class="result-badge" style="display:none" role="status" aria-live="polite"></span>
+          </div>
+          <div id="pwd-msg-box" class="pwd-msg-box" style="display:none;" role="status"></div>
+        </form>
+      </section>
+    </div>
 
     <section class="activity" id="activity">
       <h3>Activity Log</h3>
@@ -169,6 +250,20 @@ const closeLogHistoryBtn = document.querySelector<HTMLButtonElement>("#close-log
 const clearLogHistoryBtn = document.querySelector<HTMLButtonElement>("#clear-log-history")!;
 const alertRegion = document.querySelector<HTMLElement>("#alert-region")!;
 const clearBulkInputBtn = document.querySelector<HTMLButtonElement>("#clear-bulk-input")!;
+
+const tabGroupsBtn = document.querySelector<HTMLButtonElement>("#tab-groups-btn")!;
+const tabPasswordBtn = document.querySelector<HTMLButtonElement>("#tab-password-btn")!;
+const paneGroups = document.querySelector<HTMLDivElement>("#pane-groups")!;
+const panePassword = document.querySelector<HTMLDivElement>("#pane-password")!;
+
+const targetUpnInput = document.querySelector<HTMLInputElement>("#target-upn")!;
+const saveTargetUpnBtn = document.querySelector<HTMLButtonElement>("#save-target-upn-btn")!;
+const newPasswordInput = document.querySelector<HTMLInputElement>("#new-password")!;
+const togglePwdBtn = document.querySelector<HTMLButtonElement>("#toggle-pwd-btn")!;
+const forceChangePwdCheckbox = document.querySelector<HTMLInputElement>("#force-change-pwd")!;
+const btnChangePassword = document.querySelector<HTMLButtonElement>("#btn-change-password")!;
+const pwdStatusBadge = document.querySelector<HTMLSpanElement>("#pwd-status-badge")!;
+const pwdMsgBox = document.querySelector<HTMLDivElement>("#pwd-msg-box")!;
 
 let isBusy = false;
 /**
@@ -608,6 +703,12 @@ function setBusy(value: boolean): void {
   ].forEach((el) => {
     el.disabled = effectivelyBusy;
   });
+  btnChangePassword.disabled = value;
+  targetUpnInput.disabled = value;
+  newPasswordInput.disabled = value;
+  forceChangePwdCheckbox.disabled = value;
+  tabGroupsBtn.disabled = value;
+  tabPasswordBtn.disabled = value;
   boardSection.setAttribute("aria-busy", String(value));
   updateRunButtonStates();
 }
@@ -719,7 +820,154 @@ async function initializeQueues(): Promise<void> {
   resetLayout(false);
 }
 
+function switchTab(tab: "groups" | "password"): void {
+  if (isBusy) return;
+  if (tab === "groups") {
+    tabGroupsBtn.classList.add("active");
+    tabGroupsBtn.setAttribute("aria-selected", "true");
+    tabPasswordBtn.classList.remove("active");
+    tabPasswordBtn.setAttribute("aria-selected", "false");
+    paneGroups.classList.remove("hidden");
+    panePassword.classList.add("hidden");
+  } else {
+    tabPasswordBtn.classList.add("active");
+    tabPasswordBtn.setAttribute("aria-selected", "true");
+    tabGroupsBtn.classList.remove("active");
+    tabGroupsBtn.setAttribute("aria-selected", "false");
+    panePassword.classList.remove("hidden");
+    paneGroups.classList.add("hidden");
+  }
+}
+
+function togglePasswordVisibility(): void {
+  if (newPasswordInput.type === "password") {
+    newPasswordInput.type = "text";
+    togglePwdBtn.textContent = "🙈";
+  } else {
+    newPasswordInput.type = "password";
+    togglePwdBtn.textContent = "👁";
+  }
+}
+
+function stripAnsi(text: string): string {
+  return text
+    .replace(/[\u001b\x1b]\[[0-9;]*[a-zA-Z]/g, "")
+    .replace(/\[\d+(?:;\d+)*m/g, "")
+    .replace(/[¤]\S*/g, "")
+    .trim();
+}
+
+async function handlePasswordChange(): Promise<void> {
+  if (isBusy) {
+    log("Cannot run password change while another operation is in progress.", true);
+    return;
+  }
+
+  const rawTarget = targetUpnInput.value.trim();
+  const targetEmail = normalizeEmail(rawTarget);
+  if (!targetEmail) {
+    log("Please enter a valid target user email (e.g. aswhiteplus@aswhiteglobal.com).", true);
+    targetUpnInput.focus();
+    return;
+  }
+
+  const newPwd = newPasswordInput.value;
+  if (newPwd.length < 8) {
+    log("New password must be at least 8 characters long.", true);
+    newPasswordInput.focus();
+    return;
+  }
+
+  const rawAdmin = adminUpnInput.value.trim();
+  const adminUpn = rawAdmin ? normalizeEmail(rawAdmin) : null;
+
+  const forceChange = forceChangePwdCheckbox.checked;
+
+  try {
+    setBusy(true);
+    btnChangePassword.disabled = true;
+    btnChangePassword.classList.add("is-loading");
+    btnChangePassword.innerHTML = `<span class="spinner" aria-hidden="true"></span> Changing Password…`;
+    pwdStatusBadge.style.display = "none";
+    pwdMsgBox.style.display = "none";
+    pwdMsgBox.textContent = "";
+
+    log(`[START] Changing password for ${targetEmail} via Microsoft Graph...`);
+    showProgressIndeterminate("Connecting to Microsoft Graph & changing password…");
+
+    const result = await invoke<PasswordChangeResult>("change_user_password", {
+      targetEmail,
+      newPassword: newPwd,
+      adminUpn,
+      forceChangeNextSignin: forceChange,
+    });
+
+    if (result.success) {
+      log(`[SUCCESS] ${result.message}`);
+      pwdStatusBadge.textContent = "✓ Success";
+      pwdStatusBadge.className = "result-badge success";
+      pwdStatusBadge.style.display = "inline-flex";
+      pwdMsgBox.textContent = `✓ ${result.message}`;
+      pwdMsgBox.className = "pwd-msg-box success";
+      pwdMsgBox.style.display = "block";
+      newPasswordInput.value = "";
+    } else {
+      log(`[FAILED] ${result.message}`, true);
+      pwdStatusBadge.textContent = "✗ Failed";
+      pwdStatusBadge.className = "result-badge fail";
+      pwdStatusBadge.style.display = "inline-flex";
+      pwdMsgBox.textContent = `✗ ${stripAnsi(result.message)}`;
+      pwdMsgBox.className = "pwd-msg-box error";
+      pwdMsgBox.style.display = "block";
+    }
+
+    if (result.stdout) {
+      log(result.stdout);
+    }
+    if (result.stderr) {
+      log(`[STDERR] ${result.stderr}`, true);
+    }
+  } catch (error) {
+    const errorMsg = String(error);
+    log(`[ERROR] ${errorMsg}`, true);
+    pwdStatusBadge.textContent = "✗ Error";
+    pwdStatusBadge.className = "result-badge fail";
+    pwdStatusBadge.style.display = "inline-flex";
+    pwdMsgBox.textContent = `✗ ${stripAnsi(errorMsg)}`;
+    pwdMsgBox.className = "pwd-msg-box error";
+    pwdMsgBox.style.display = "block";
+  } finally {
+    setBusy(false);
+    btnChangePassword.disabled = false;
+    btnChangePassword.classList.remove("is-loading");
+    btnChangePassword.innerHTML = `🔑 Change Password`;
+    hideProgress();
+  }
+}
+
 // ── Event listeners ───────────────────────────────────────────────
+tabGroupsBtn.addEventListener("click", () => switchTab("groups"));
+tabPasswordBtn.addEventListener("click", () => switchTab("password"));
+togglePwdBtn.addEventListener("click", () => togglePasswordVisibility());
+btnChangePassword.addEventListener("click", () => void handlePasswordChange());
+saveTargetUpnBtn.addEventListener("click", () => {
+  const current = targetUpnInput.value.trim();
+  const saved = saveTargetPasswordEmail(current);
+  targetUpnInput.value = saved;
+  saveTargetUpnBtn.classList.add("saved");
+  saveTargetUpnBtn.innerHTML = `<span class="save-icon">✓</span> Saved!`;
+  log(`[INFO] Saved default target email: ${saved}`);
+  setTimeout(() => {
+    saveTargetUpnBtn.classList.remove("saved");
+    saveTargetUpnBtn.innerHTML = `<span class="save-icon">✓</span> Save`;
+  }, 1800);
+});
+targetUpnInput.addEventListener("change", () => {
+  const normalized = normalizeEmail(targetUpnInput.value);
+  if (normalized) {
+    saveTargetPasswordEmail(normalized);
+  }
+});
 queueToAddBtn.addEventListener("click", () => void queueFromInput("add"));
 queueToRemoveBtn.addEventListener("click", () => void queueFromInput("remove"));
 clearQueuesBtn.addEventListener("click", () => void clearQueues());
@@ -780,6 +1028,7 @@ wireDropZone(removeZone, "remove");
 wireQueueDelegation(addZone);
 wireQueueDelegation(removeZone);
 renderLogHistory();
+targetUpnInput.value = loadStoredTargetPasswordEmail();
 void initializeQueues();
 
 // ── Version display ───────────────────────────────────────────────

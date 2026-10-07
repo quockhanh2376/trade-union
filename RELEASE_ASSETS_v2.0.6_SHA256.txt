@@ -1,0 +1,2 @@
+d1b5727e8842bddffc3dd9122653d08de0892f32d5f516dd2a987b8c39eaa1f3  Trade Union Group Manager_2.0.6_x64_en-US.msi
+2fedfa9cb8ca75dfc6dbfd1ed47ab1c887262c13bfa52b89765df8308e45de88  Trade Union Group Manager_2.0.6_x64-setup.exe
