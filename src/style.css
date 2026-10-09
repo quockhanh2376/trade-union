@@ -704,7 +704,7 @@ body {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
-  color: #c9d7f2;
+  color: #e9eef8;
 }
 
 #log-box.error {
@@ -712,32 +712,33 @@ body {
 }
 
 .log-stamp {
-  color: #5f7295;
+  color: #6b7d9e;
 }
 
 .log-ok {
-  color: #6effd6;
+  color: #4ade80;
 }
 
 .log-fail {
-  color: #ff9baa;
+  color: #ff4d5e;
+  font-weight: 600;
 }
 
 .log-reason {
-  color: #ffb38a;
+  color: #ff8f9a;
 }
 
 .log-warn {
-  color: #ffd166;
+  color: #ffd60a;
 }
 
 .log-summary {
-  color: #eaf1ff;
+  color: #ffffff;
   font-weight: 700;
 }
 
 .log-info {
-  color: #8fb8ef;
+  color: #e9eef8;
 }
 
 .history-modal {
@@ -796,7 +797,7 @@ body {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
-  color: #c9d7f2;
+  color: #e9eef8;
   background: rgba(7, 12, 21, 0.9);
 }
 
