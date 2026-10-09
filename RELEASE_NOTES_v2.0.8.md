@@ -27,8 +27,8 @@ Tag: `v2.0.8`
 
 | File | Size | SHA256 |
 |------|------|--------|
-| `Trade Union Group Manager_2.0.8_x64_en-US.msi` | TBD | TBD |
-| `Trade Union Group Manager_2.0.8_x64-setup.exe` | TBD | TBD |
+| `Trade Union Group Manager_2.0.8_x64_en-US.msi` | 15.9 MB | `e1c7ece071b51ce2ab691c288397fb37094e18846bf2e7062e2e6af54a221724` |
+| `Trade Union Group Manager_2.0.8_x64-setup.exe` | 10.8 MB | `9e570978c23964b2e178bb6fea8412de80fd7f7b8a5252a1e7ee87631b7f7154` |
 
 ## Notes
 
