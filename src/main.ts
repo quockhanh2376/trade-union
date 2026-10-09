@@ -351,9 +351,33 @@ function flushBulkCount(): void {
 }
 
 function renderLogHistory(): void {
-  historyBox.textContent = logHistory.length
-    ? logHistory.join("\n")
+  historyBox.innerHTML = logHistory.length
+    ? logHistory.map((line) => colorizeLogLine(line)).join("\n")
     : "No logs history yet.";
+}
+
+/**
+ * Render one persisted log line as safe HTML with a per-line semantic color:
+ * green for successes, red for failures, orange for failure reasons, yellow
+ * for warnings, bold for run summaries, blue for queue actions. The line is
+ * HTML-escaped before classification so file content can never inject markup.
+ */
+function colorizeLogLine(line: string, error = false): string {
+  const escaped = escapeHtml(line);
+  const match = escaped.match(/^(\[\d{2}:\d{2}:\d{2}\])\s?(.*)$/);
+  const stamp = match ? match[1] : "";
+  const rest = match ? match[2] : escaped;
+
+  let cls = "";
+  if (error || rest.startsWith("✗")) cls = "log-fail";
+  else if (rest.startsWith("✓")) cls = "log-ok";
+  else if (rest.startsWith("↳")) cls = "log-reason";
+  else if (/^(Warning|⚠)/.test(rest)) cls = "log-warn";
+  else if (/^Done (ADD|REMOVE)\b/.test(rest)) cls = "log-summary";
+  else if (/^(Queued|Auto removed|Cleared|Undo applied|Running)\b/.test(rest)) cls = "log-info";
+
+  const stampHtml = stamp ? `<span class="log-stamp">${stamp}</span> ` : "";
+  return `${stampHtml}<span class="${cls}">${rest}</span>`;
 }
 
 let modalOpener: HTMLElement | null = null;
@@ -410,7 +434,7 @@ function clearLogHistory(): void {
 function log(message: string, error = false): void {
   const stamp = new Date().toTimeString().slice(0, 8);
   const line = `[${stamp}] ${message}`;
-  logBox.textContent = `${line}\n${logBox.textContent ?? ""}`.trim();
+  logBox.innerHTML = `${colorizeLogLine(line, error)}\n${logBox.innerHTML}`.trim();
   logHistory.unshift(line);
   if (logHistory.length > LOG_HISTORY_MAX_LINES) {
     logHistory.length = LOG_HISTORY_MAX_LINES;

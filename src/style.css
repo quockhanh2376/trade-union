@@ -711,6 +711,35 @@ body {
   border-color: #8a3f4d;
 }
 
+.log-stamp {
+  color: #5f7295;
+}
+
+.log-ok {
+  color: #6effd6;
+}
+
+.log-fail {
+  color: #ff9baa;
+}
+
+.log-reason {
+  color: #ffb38a;
+}
+
+.log-warn {
+  color: #ffd166;
+}
+
+.log-summary {
+  color: #eaf1ff;
+  font-weight: 700;
+}
+
+.log-info {
+  color: #8fb8ef;
+}
+
 .history-modal {
   position: fixed;
   inset: 0;
