@@ -88,7 +88,39 @@ function Get-FriendlyActionError {
         $Message -match "AlreadyMember") {
         return "Duplicate: email is already a member of this group."
     }
+    if ($Message -match "multiple recipients matching") {
+        return "Ambiguous email: multiple Microsoft 365 objects share this address (e.g. a mailbox and a contact). Remove or rename the duplicate in the admin center, then retry."
+    }
     return $Message
+}
+
+# Exchange identity resolution is ambiguous when the same address is stamped on
+# several objects (mailbox + mail contact / shared mailbox). Resolving to the
+# object GUID makes Add-/Remove-DistributionGroupMember target a single object.
+function Resolve-RecipientIdentity {
+    param([string]$Email)
+
+    $escaped = $Email.Replace("'", "''")
+    try {
+        $recipients = @(Get-Recipient -Filter "EmailAddresses -eq 'smtp:$escaped'" -ResultSize Unlimited -ErrorAction Stop)
+    }
+    catch {
+        return $Email
+    }
+
+    if ($recipients.Count -eq 1) {
+        return $recipients[0].Guid.ToString()
+    }
+
+    if ($recipients.Count -gt 1) {
+        $exact = @($recipients | Where-Object { [string]$_.PrimarySmtpAddress -eq $Email })
+        if ($exact.Count -eq 1) {
+            return $exact[0].Guid.ToString()
+        }
+        return $null
+    }
+
+    return $Email
 }
 
 function Is-SharedMailbox {
@@ -160,21 +192,25 @@ try {
 
         foreach ($email in $emails) {
             $processedCount++
+            $recipientIdentity = Resolve-RecipientIdentity -Email $email
             try {
+                if ($null -eq $recipientIdentity) {
+                    throw "There are multiple recipients matching the identity '$email'. Please specify a unique value."
+                }
                 if ($isSharedMailbox) {
                     if ($Action -eq "Add") {
-                        Add-MailboxPermission -Identity $group -User $email -AccessRights FullAccess -AutoMapping $false -ErrorAction Stop | Out-Null
+                        Add-MailboxPermission -Identity $group -User $recipientIdentity -AccessRights FullAccess -AutoMapping $false -ErrorAction Stop | Out-Null
                     }
                     else {
-                        Remove-MailboxPermission -Identity $group -User $email -AccessRights FullAccess -Confirm:$false -ErrorAction Stop | Out-Null
+                        Remove-MailboxPermission -Identity $group -User $recipientIdentity -AccessRights FullAccess -Confirm:$false -ErrorAction Stop | Out-Null
                     }
                 }
                 else {
                     if ($Action -eq "Add") {
-                        Add-DistributionGroupMember -Identity $group -Member $email -BypassSecurityGroupManagerCheck -ErrorAction Stop
+                        Add-DistributionGroupMember -Identity $group -Member $recipientIdentity -BypassSecurityGroupManagerCheck -ErrorAction Stop
                     }
                     else {
-                        Remove-DistributionGroupMember -Identity $group -Member $email -BypassSecurityGroupManagerCheck -Confirm:$false -ErrorAction Stop
+                        Remove-DistributionGroupMember -Identity $group -Member $recipientIdentity -BypassSecurityGroupManagerCheck -Confirm:$false -ErrorAction Stop
                     }
                 }
 
