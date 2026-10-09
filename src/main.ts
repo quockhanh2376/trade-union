@@ -122,6 +122,7 @@ app.innerHTML = `
                 <th>Email</th>
                 <th>Group</th>
                 <th>Status</th>
+                <th>Message</th>
               </tr>
             </thead>
             <tbody id="result-table-body"></tbody>
@@ -479,6 +480,7 @@ function renderResultDetails(details: ActionDetail[]): void {
           <td>${escapeHtml(item.email)}</td>
           <td>${escapeHtml(item.group)}</td>
           <td class="cell-status">${statusLabel}</td>
+          <td class="cell-message">${note ? escapeHtml(note) : "—"}</td>
         </tr>
       `;
     })

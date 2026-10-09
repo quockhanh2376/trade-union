@@ -79,6 +79,96 @@ function Read-GroupList {
     return $items.ToArray()
 }
 
+function Get-FriendlyActionError {
+    param([string]$Message)
+
+    $Message = ($Message -replace '^\|\|\s*', '')
+    if ($Message -match "already\s+(exist|a\s+member|subscri)" -or
+        $Message -match "IdentityAlreadyMember" -or
+        $Message -match "MemberAlreadyExists" -or
+        $Message -match "AlreadyMember") {
+        return "Duplicate: email is already a member of this group."
+    }
+    if ($Message -match "isn't a member|is not a member|not a member") {
+        return "Email is not a member of this group."
+    }
+    if ($Message -match "couldn't be found|couldn't find|RecipientNotFound|doesn't exist|can't find") {
+        return "Email not found in Microsoft 365 directory."
+    }
+    if ($Message -match "multiple recipients matching") {
+        return "Ambiguous email: multiple Microsoft 365 objects share this address (e.g. a mailbox and a contact). Remove or rename the duplicate in the admin center, then retry."
+    }
+    return $Message
+}
+
+# Tenant context: addresses on these domains are internal Azure AD accounts;
+# every other domain is represented by mail contacts.
+$InternalDomainPattern = "@(consulting\.)?aswhiteglobal\.com$"
+
+# Deterministic pick when several directory objects share one address.
+# Internal-domain emails prefer real mailboxes; external-domain emails
+# prefer the mail contact that represents them.
+function Select-BestRecipient {
+    param([object[]]$Recipients, [string]$Email)
+
+    $isInternal = $Email -match $InternalDomainPattern
+    if ($isInternal) {
+        $rank = @{
+            "UserMailbox"                    = 0
+            "MailUser"                       = 1
+            "SharedMailbox"                  = 2
+            "MailContact"                    = 3
+            "MailUniversalSecurityGroup"     = 4
+            "MailUniversalDistributionGroup" = 5
+        }
+    }
+    else {
+        $rank = @{
+            "MailContact"                    = 0
+            "MailUser"                       = 1
+            "UserMailbox"                    = 2
+            "SharedMailbox"                  = 3
+            "MailUniversalSecurityGroup"     = 4
+            "MailUniversalDistributionGroup" = 5
+        }
+    }
+    $sorted = @($Recipients | Sort-Object {
+        $type = [string]$_.RecipientTypeDetails
+        if ($rank.ContainsKey($type)) { $rank[$type] } else { 99 }
+    })
+    return $sorted[0]
+}
+
+# Exchange identity resolution is ambiguous when the same address is stamped on
+# several objects (mailbox + mail contact / shared mailbox). Resolve to a single
+# object GUID so the member cmdlets always target exactly one object.
+function Resolve-RecipientIdentity {
+    param([string]$Email)
+
+    $escaped = $Email.Replace("'", "''")
+    try {
+        $recipients = @(Get-Recipient -Filter "EmailAddresses -eq 'smtp:$escaped'" -ResultSize Unlimited -ErrorAction Stop)
+    }
+    catch {
+        return $Email
+    }
+
+    if ($recipients.Count -eq 0) {
+        return $Email
+    }
+
+    $exact = @($recipients | Where-Object { [string]$_.PrimarySmtpAddress -eq $Email })
+    if ($exact.Count -gt 0) {
+        $recipients = $exact
+    }
+
+    $chosen = Select-BestRecipient -Recipients $recipients -Email $Email
+    if ($recipients.Count -gt 1) {
+        Write-Host "Warning: '$Email' matches $($recipients.Count) directory objects; using $($chosen.RecipientTypeDetails) ($($chosen.Guid))." -ForegroundColor Yellow
+    }
+    return $chosen.Guid.ToString()
+}
+
 function Is-SharedMailbox {
     param([string]$Identity)
     try {
@@ -146,23 +236,47 @@ try {
 
         $isSharedMailbox = Is-SharedMailbox -Identity $group
 
+        # Pin each email to the exact object that is a member of THIS group, so
+        # duplicate addresses elsewhere in the tenant cannot interfere.
+        $memberGuids = @{}
+        if (-not $isSharedMailbox) {
+            try {
+                foreach ($member in (Get-DistributionGroupMember -Identity $group -ErrorAction Stop)) {
+                    $addr = ([string]$member.PrimarySmtpAddress).ToLowerInvariant()
+                    if ($addr -and -not $memberGuids.ContainsKey($addr)) {
+                        $memberGuids[$addr] = $member.Guid.ToString()
+                    }
+                }
+            }
+            catch {}
+        }
+
         foreach ($email in $emails) {
             $processedCount++
+            if (-not $isSharedMailbox -and $memberGuids.ContainsKey($email)) {
+                $recipientIdentity = $memberGuids[$email]
+            }
+            else {
+                $recipientIdentity = Resolve-RecipientIdentity -Email $email
+            }
             try {
+                if ([string]::IsNullOrWhiteSpace($recipientIdentity)) {
+                    throw "There are multiple recipients matching the identity '$email'. Please specify a unique value."
+                }
                 if ($isSharedMailbox) {
                     if ($Action -eq "Add") {
-                        Add-MailboxPermission -Identity $group -User $email -AccessRights FullAccess -AutoMapping $false -ErrorAction Stop | Out-Null
+                        Add-MailboxPermission -Identity $group -User $recipientIdentity -AccessRights FullAccess -AutoMapping $false -ErrorAction Stop | Out-Null
                     }
                     else {
-                        Remove-MailboxPermission -Identity $group -User $email -AccessRights FullAccess -Confirm:$false -ErrorAction Stop | Out-Null
+                        Remove-MailboxPermission -Identity $group -User $recipientIdentity -AccessRights FullAccess -Confirm:$false -ErrorAction Stop | Out-Null
                     }
                 }
                 else {
                     if ($Action -eq "Add") {
-                        Add-DistributionGroupMember -Identity $group -Member $email -BypassSecurityGroupManagerCheck -ErrorAction Stop
+                        Add-DistributionGroupMember -Identity $group -Member $recipientIdentity -BypassSecurityGroupManagerCheck -ErrorAction Stop
                     }
                     else {
-                        Remove-DistributionGroupMember -Identity $group -Member $email -BypassSecurityGroupManagerCheck -Confirm:$false -ErrorAction Stop
+                        Remove-DistributionGroupMember -Identity $group -Member $recipientIdentity -BypassSecurityGroupManagerCheck -Confirm:$false -ErrorAction Stop
                     }
                 }
 
@@ -177,7 +291,7 @@ try {
             }
             catch {
                 $failedCount++
-                $message = $_.Exception.Message
+                $message = Get-FriendlyActionError -Message $_.Exception.Message
                 $details.Add([PSCustomObject]@{
                         email = $email
                         group = $group

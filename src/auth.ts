@@ -26,5 +26,5 @@ export function autoExpireAuthCache(logFn: (msg: string) => void): void {
   if (!isAuthCacheExpired()) return;
   authSessionExpiresAt = 0;
   authCacheExpiryLogged = true;
-  logFn("Microsoft admin auth session expired after 10 minutes.");
+  logFn("Microsoft admin auth session expired after 20 minutes.");
 }
