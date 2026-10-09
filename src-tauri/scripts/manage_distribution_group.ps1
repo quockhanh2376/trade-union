@@ -100,17 +100,36 @@ function Get-FriendlyActionError {
     return $Message
 }
 
-# Deterministic pick when several directory objects share one address.
-function Select-BestRecipient {
-    param([object[]]$Recipients)
+# Tenant context: addresses on these domains are internal Azure AD accounts;
+# every other domain is represented by mail contacts.
+$InternalDomainPattern = "@(consulting\.)?aswhiteglobal\.com$"
 
-    $rank = @{
-        "UserMailbox"                  = 0
-        "MailUser"                     = 1
-        "SharedMailbox"                = 2
-        "MailContact"                  = 3
-        "MailUniversalSecurityGroup"   = 4
-        "MailUniversalDistributionGroup" = 5
+# Deterministic pick when several directory objects share one address.
+# Internal-domain emails prefer real mailboxes; external-domain emails
+# prefer the mail contact that represents them.
+function Select-BestRecipient {
+    param([object[]]$Recipients, [string]$Email)
+
+    $isInternal = $Email -match $InternalDomainPattern
+    if ($isInternal) {
+        $rank = @{
+            "UserMailbox"                    = 0
+            "MailUser"                       = 1
+            "SharedMailbox"                  = 2
+            "MailContact"                    = 3
+            "MailUniversalSecurityGroup"     = 4
+            "MailUniversalDistributionGroup" = 5
+        }
+    }
+    else {
+        $rank = @{
+            "MailContact"                    = 0
+            "MailUser"                       = 1
+            "UserMailbox"                    = 2
+            "SharedMailbox"                  = 3
+            "MailUniversalSecurityGroup"     = 4
+            "MailUniversalDistributionGroup" = 5
+        }
     }
     $sorted = @($Recipients | Sort-Object {
         $type = [string]$_.RecipientTypeDetails
@@ -142,7 +161,7 @@ function Resolve-RecipientIdentity {
         $recipients = $exact
     }
 
-    $chosen = Select-BestRecipient -Recipients $recipients
+    $chosen = Select-BestRecipient -Recipients $recipients -Email $Email
     if ($recipients.Count -gt 1) {
         Write-Host "Warning: '$Email' matches $($recipients.Count) directory objects; using $($chosen.RecipientTypeDetails) ($($chosen.Guid))." -ForegroundColor Yellow
     }

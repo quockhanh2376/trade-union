@@ -13,7 +13,7 @@ Tag: `v2.0.7`
 
 - **Ambiguous-recipient handling (per-email unique ID):**
   - Emails whose address is stamped on multiple Microsoft 365 objects (e.g. a mailbox and a mail contact — reported with `quan.tran@premex.com`) made both Add and Remove fail with the raw "There are multiple recipients matching the identity" error.
-  - The script now pins every email to a single directory object ID (GUID) before acting: membership is first checked against the target group's actual member list (exact GUID match), then against the directory via `Get-Recipient -Filter "EmailAddresses -eq ..."` with deterministic precedence (UserMailbox > MailUser > SharedMailbox > MailContact > ...).
+  - The script now pins every email to a single directory object ID (GUID) before acting: membership is first checked against the target group's actual member list (exact GUID match), then against the directory via `Get-Recipient -Filter "EmailAddresses -eq ..."` with domain-aware precedence — addresses on `aswhiteglobal.com` / `consulting.aswhiteglobal.com` are treated as internal Azure AD accounts (UserMailbox > MailUser > SharedMailbox preferred), while all other domains are treated as mail contacts (MailContact preferred).
   - Ambiguous resolutions are announced in the log with the chosen object type and GUID; friendlier errors were added for "not a member" and "not found in directory" cases; other queued emails continue to be processed.
 
 ## Verification
