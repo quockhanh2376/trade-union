@@ -88,15 +88,40 @@ function Get-FriendlyActionError {
         $Message -match "AlreadyMember") {
         return "Duplicate: email is already a member of this group."
     }
+    if ($Message -match "isn't a member|is not a member|not a member") {
+        return "Email is not a member of this group."
+    }
+    if ($Message -match "couldn't be found|couldn't find|RecipientNotFound|doesn't exist|can't find") {
+        return "Email not found in Microsoft 365 directory."
+    }
     if ($Message -match "multiple recipients matching") {
         return "Ambiguous email: multiple Microsoft 365 objects share this address (e.g. a mailbox and a contact). Remove or rename the duplicate in the admin center, then retry."
     }
     return $Message
 }
 
+# Deterministic pick when several directory objects share one address.
+function Select-BestRecipient {
+    param([object[]]$Recipients)
+
+    $rank = @{
+        "UserMailbox"                  = 0
+        "MailUser"                     = 1
+        "SharedMailbox"                = 2
+        "MailContact"                  = 3
+        "MailUniversalSecurityGroup"   = 4
+        "MailUniversalDistributionGroup" = 5
+    }
+    $sorted = @($Recipients | Sort-Object {
+        $type = [string]$_.RecipientTypeDetails
+        if ($rank.ContainsKey($type)) { $rank[$type] } else { 99 }
+    })
+    return $sorted[0]
+}
+
 # Exchange identity resolution is ambiguous when the same address is stamped on
-# several objects (mailbox + mail contact / shared mailbox). Resolving to the
-# object GUID makes Add-/Remove-DistributionGroupMember target a single object.
+# several objects (mailbox + mail contact / shared mailbox). Resolve to a single
+# object GUID so the member cmdlets always target exactly one object.
 function Resolve-RecipientIdentity {
     param([string]$Email)
 
@@ -108,19 +133,20 @@ function Resolve-RecipientIdentity {
         return $Email
     }
 
-    if ($recipients.Count -eq 1) {
-        return $recipients[0].Guid.ToString()
+    if ($recipients.Count -eq 0) {
+        return $Email
     }
 
+    $exact = @($recipients | Where-Object { [string]$_.PrimarySmtpAddress -eq $Email })
+    if ($exact.Count -gt 0) {
+        $recipients = $exact
+    }
+
+    $chosen = Select-BestRecipient -Recipients $recipients
     if ($recipients.Count -gt 1) {
-        $exact = @($recipients | Where-Object { [string]$_.PrimarySmtpAddress -eq $Email })
-        if ($exact.Count -eq 1) {
-            return $exact[0].Guid.ToString()
-        }
-        return $null
+        Write-Host "Warning: '$Email' matches $($recipients.Count) directory objects; using $($chosen.RecipientTypeDetails) ($($chosen.Guid))." -ForegroundColor Yellow
     }
-
-    return $Email
+    return $chosen.Guid.ToString()
 }
 
 function Is-SharedMailbox {
@@ -190,11 +216,31 @@ try {
 
         $isSharedMailbox = Is-SharedMailbox -Identity $group
 
+        # Pin each email to the exact object that is a member of THIS group, so
+        # duplicate addresses elsewhere in the tenant cannot interfere.
+        $memberGuids = @{}
+        if (-not $isSharedMailbox) {
+            try {
+                foreach ($member in (Get-DistributionGroupMember -Identity $group -ErrorAction Stop)) {
+                    $addr = ([string]$member.PrimarySmtpAddress).ToLowerInvariant()
+                    if ($addr -and -not $memberGuids.ContainsKey($addr)) {
+                        $memberGuids[$addr] = $member.Guid.ToString()
+                    }
+                }
+            }
+            catch {}
+        }
+
         foreach ($email in $emails) {
             $processedCount++
-            $recipientIdentity = Resolve-RecipientIdentity -Email $email
+            if (-not $isSharedMailbox -and $memberGuids.ContainsKey($email)) {
+                $recipientIdentity = $memberGuids[$email]
+            }
+            else {
+                $recipientIdentity = Resolve-RecipientIdentity -Email $email
+            }
             try {
-                if ($null -eq $recipientIdentity) {
+                if ([string]::IsNullOrWhiteSpace($recipientIdentity)) {
                     throw "There are multiple recipients matching the identity '$email'. Please specify a unique value."
                 }
                 if ($isSharedMailbox) {

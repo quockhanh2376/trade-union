@@ -11,10 +11,10 @@ Tag: `v2.0.7`
   - Result table now shows a visible **Message** column (previously the error text was only a hover tooltip), red for failures, muted grey for successes.
   - Duplicate failures are surfaced in the log box, log history (View Logs), and screen-reader alert region as before; other queued emails continue to be processed.
 
-- **Ambiguous-recipient handling:**
+- **Ambiguous-recipient handling (per-email unique ID):**
   - Emails whose address is stamped on multiple Microsoft 365 objects (e.g. a mailbox and a mail contact — reported with `quan.tran@premex.com`) made both Add and Remove fail with the raw "There are multiple recipients matching the identity" error.
-  - The script now resolves each email to a unique directory object GUID via `Get-Recipient -Filter "EmailAddresses -eq ..."` before calling the member cmdlets; when the primary SMTP address matches exactly one object, that object is targeted.
-  - If the address is still ambiguous, the email fails fast with a clear message telling the admin to remove/rename the duplicate object in the Microsoft 365 admin center; other queued emails continue to be processed.
+  - The script now pins every email to a single directory object ID (GUID) before acting: membership is first checked against the target group's actual member list (exact GUID match), then against the directory via `Get-Recipient -Filter "EmailAddresses -eq ..."` with deterministic precedence (UserMailbox > MailUser > SharedMailbox > MailContact > ...).
+  - Ambiguous resolutions are announced in the log with the chosen object type and GUID; friendlier errors were added for "not a member" and "not found in directory" cases; other queued emails continue to be processed.
 
 ## Verification
 
