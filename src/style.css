@@ -537,6 +537,17 @@ body {
 
 .result-table .cell-status {
   font-weight: 700;
+  white-space: nowrap;
+}
+
+.result-table .cell-message {
+  color: #ff9baa;
+  font-size: 0.78rem;
+  word-break: break-word;
+}
+
+.result-table tr.status-ok .cell-message {
+  color: #8fa7c9;
 }
 
 .result-table tr.status-ok .cell-status {

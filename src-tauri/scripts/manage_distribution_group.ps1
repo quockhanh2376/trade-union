@@ -79,6 +79,18 @@ function Read-GroupList {
     return $items.ToArray()
 }
 
+function Get-FriendlyActionError {
+    param([string]$Message)
+
+    if ($Message -match "already\s+(exist|a\s+member|subscri)" -or
+        $Message -match "IdentityAlreadyMember" -or
+        $Message -match "MemberAlreadyExists" -or
+        $Message -match "AlreadyMember") {
+        return "Duplicate: email is already a member of this group."
+    }
+    return $Message
+}
+
 function Is-SharedMailbox {
     param([string]$Identity)
     try {
@@ -177,7 +189,7 @@ try {
             }
             catch {
                 $failedCount++
-                $message = $_.Exception.Message
+                $message = Get-FriendlyActionError -Message $_.Exception.Message
                 $details.Add([PSCustomObject]@{
                         email = $email
                         group = $group
