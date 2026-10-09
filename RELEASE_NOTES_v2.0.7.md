@@ -22,8 +22,16 @@ Tag: `v2.0.7`
 - `cargo test --manifest-path src-tauri/Cargo.toml` → 15/15 pass
 - `cargo check --manifest-path src-tauri/Cargo.toml` → clean
 - `npm run build` → frontend bundle built successfully
+- `npm run tauri -- build` → produced MSI + NSIS installers
+
+## Assets
+
+| File | Size | SHA256 |
+|------|------|--------|
+| `Trade Union Group Manager_2.0.7_x64_en-US.msi` | 16.0 MB | `433061e7df366939a082c5eef7b794987a7714642e7b94ae31f9125ee6fb53f9` |
+| `Trade Union Group Manager_2.0.7_x64-setup.exe` | 10.7 MB | `77e64e8cbd29410e578053f09579479e15461b76f4dce42b4e532eea70d066c2` |
 
 ## Notes
 
+- **Smaller installers:** the WebView2 `offlineInstaller` is no longer embedded — installers use the `downloadBootstrapper` (≈150 MB smaller). Machines without WebView2 (rare; Windows 11 and machines with Edge already have it) download the small bootstrapper at install time.
 - Upgrade from v2.0.6 is supported via the stable WiX `upgradeCode` (`142d4337-ebfa-5a2e-a5f7-33592dce26d6`); the NSIS clean-install hook removes the previous build before copying the new one without affecting user app data.
-- Installer asset SHA256 hashes to be appended after `npm run tauri -- build`.
