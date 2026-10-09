@@ -700,8 +700,10 @@ body {
   background: rgba(7, 12, 21, 0.9);
   padding: 10px;
   font-family: "Consolas", "Cascadia Mono", monospace;
-  font-size: 0.82rem;
-  line-height: 1.45;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
   color: #c9d7f2;
 }
 
@@ -761,8 +763,10 @@ body {
   min-height: 320px;
   max-height: 68vh;
   font-family: "Consolas", "Cascadia Mono", monospace;
-  font-size: 0.82rem;
-  line-height: 1.45;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
   color: #c9d7f2;
   background: rgba(7, 12, 21, 0.9);
 }

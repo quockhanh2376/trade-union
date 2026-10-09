@@ -4,6 +4,7 @@ import "./style.css";
 import type { QueueName, GroupRunResult, ActionDetail, ActionStatus, SeedEmails, PasswordChangeResult } from "./types.ts";
 import { LOG_HISTORY_MAX_LINES } from "./constants.ts";
 import { normalizeEmail, parseEmails, escapeHtml, sanitizeEmailInput } from "./email.ts";
+import { formatRunStdout } from "./log-format.ts";
 import {
   loadStoredGroupEmails,
   saveGroupEmails,
@@ -407,7 +408,7 @@ function clearLogHistory(): void {
 }
 
 function log(message: string, error = false): void {
-  const stamp = new Date().toLocaleTimeString();
+  const stamp = new Date().toTimeString().slice(0, 8);
   const line = `[${stamp}] ${message}`;
   logBox.textContent = `${line}\n${logBox.textContent ?? ""}`.trim();
   logHistory.unshift(line);
@@ -671,7 +672,8 @@ async function runAction(action: QueueName): Promise<void> {
     });
 
     log(`Done ${result.action.toUpperCase()} for ${groups.length} group(s): ${result.successCount} success, ${result.failedCount} failed.`);
-    if (result.stdout) log(result.stdout);
+    const cleanStdout = formatRunStdout(result.stdout ?? "");
+    if (cleanStdout) log(cleanStdout);
     if (result.stderr) log(result.stderr, true);
     renderResultDetails(result.details ?? []);
     await autoRemoveCompletedEmails(action, payload, groups, result.details ?? [], result.failedCount);
