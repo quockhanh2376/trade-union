@@ -82,6 +82,7 @@ function Read-GroupList {
 function Get-FriendlyActionError {
     param([string]$Message)
 
+    $Message = ($Message -replace '^\|\|\s*', '')
     if ($Message -match "already\s+(exist|a\s+member|subscri)" -or
         $Message -match "IdentityAlreadyMember" -or
         $Message -match "MemberAlreadyExists" -or
