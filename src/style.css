@@ -633,6 +633,27 @@ body {
   background: rgba(20, 30, 47, 0.45);
 }
 
+.export-btn {
+  margin-left: 10px;
+  padding: 3px 14px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #6effd6;
+  border: 2px solid #2f9e6c;
+  border-radius: 999px;
+  background: rgba(20, 46, 36, 0.5);
+  box-shadow: 0 0 10px rgba(52, 211, 153, 0.35);
+}
+
+.export-btn:hover:not(:disabled) {
+  background: rgba(52, 211, 153, 0.15);
+}
+
+.export-btn:disabled {
+  opacity: 0.45;
+  box-shadow: none;
+}
+
 #clear-queues {
   color: #ff9baa;
   border-color: #8a3f4d;

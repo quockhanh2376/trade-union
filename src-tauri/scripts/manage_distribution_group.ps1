@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Add", "Remove")]
+    [ValidateSet("Add", "Remove", "Export")]
     [string]$Action,
 
     [Parameter(Mandatory = $true)]
@@ -216,6 +216,44 @@ try {
         throw "No valid distribution groups found."
     }
 
+    # Export-only mode: dump the current member list of every group to the
+    # output file without touching any membership. The first group overwrites
+    # the file, later groups append so multi-group exports keep everything.
+    if ($Action -eq "Export") {
+        Connect-ExchangeOnce -AdminAccount $AdminUpn
+
+        $totalMembers = 0
+        $groupIndex = 0
+        foreach ($group in $groups) {
+            $groupIndex++
+            $isSharedMailbox = Is-SharedMailbox -Identity $group
+            try {
+                if ($isSharedMailbox) {
+                    $members = Get-MailboxPermission -Identity $group -ErrorAction Stop |
+                        Where-Object { $_.User -notlike "NT AUTHORITY\*" -and $_.IsInherited -eq $false }
+                    $list = @($members | Select-Object -ExpandProperty User)
+                }
+                else {
+                    $members = Get-DistributionGroupMember -Identity $group -ErrorAction Stop
+                    $list = @($members | Select-Object -ExpandProperty PrimarySmtpAddress)
+                }
+                if ($groupIndex -eq 1) {
+                    $list | Out-File -FilePath $OutputFile -Encoding UTF8
+                }
+                else {
+                    $list | Out-File -FilePath $OutputFile -Append -Encoding UTF8
+                }
+                $totalMembers += $list.Count
+                Write-Host "Exported $($list.Count) members for $group"
+            }
+            catch {
+                Write-Host "Export members failed for [$group]: $($_.Exception.Message)" -ForegroundColor Red
+            }
+        }
+        Write-Host "Export complete: $($groups.Count) group(s), $totalMembers member entries in final.txt."
+        return
+    }
+
     $emails = Read-EmailList -Path $InputFile
     if ($emails.Count -eq 0) {
         Write-Host "No valid emails found in $InputFile"
@@ -227,7 +265,6 @@ try {
     $failedCount = 0
     $processedCount = 0
     $groupIndex = 0
-    $lastExportedGroup = $null
     $details = New-Object System.Collections.Generic.List[object]
 
     foreach ($group in $groups) {
@@ -302,30 +339,9 @@ try {
                 Write-Host "Error [$group][$email]: $message" -ForegroundColor Red
             }
         }
-
-        try {
-            if ($isSharedMailbox) {
-                $members = Get-MailboxPermission -Identity $group -ErrorAction Stop |
-                    Where-Object { $_.User -notlike "NT AUTHORITY\*" -and $_.IsInherited -eq $false }
-                $members | Select-Object -ExpandProperty User | Out-File -FilePath $OutputFile -Encoding UTF8
-            }
-            else {
-                $members = Get-DistributionGroupMember -Identity $group -ErrorAction Stop
-                $members | Select-Object -ExpandProperty PrimarySmtpAddress | Out-File -FilePath $OutputFile -Encoding UTF8
-            }
-            $lastExportedGroup = $group
-            Write-Host "Updated members exported to $OutputFile for $group"
-        }
-        catch {
-            Write-Host "Export members failed for [$group]: $($_.Exception.Message)" -ForegroundColor Yellow
-        }
     }
-
     Write-Host "Completed $Action for $($groups.Count) group(s)."
     Write-Host "Success: $successCount | Failed: $failedCount"
-    if ($null -ne $lastExportedGroup) {
-        Write-Host "Last exported group: $lastExportedGroup"
-    }
 
     $resultJson = @{
         success = $successCount

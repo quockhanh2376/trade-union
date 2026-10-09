@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import "./style.css";
-import type { QueueName, GroupRunResult, ActionDetail, ActionStatus, SeedEmails, PasswordChangeResult } from "./types.ts";
+import type { QueueName, GroupRunResult, GroupExportResult, ActionDetail, ActionStatus, SeedEmails, PasswordChangeResult } from "./types.ts";
 import { LOG_HISTORY_MAX_LINES } from "./constants.ts";
 import { normalizeEmail, parseEmails, escapeHtml, sanitizeEmailInput } from "./email.ts";
 import { formatRunStdout } from "./log-format.ts";
@@ -67,6 +67,7 @@ app.innerHTML = `
         <div class="bulk-label-row">
           <span id="bulk-label">Email List</span>
           <span id="bulk-count" class="bulk-count-circle is-empty" title="Total emails in list" role="status" aria-label="Email count">0</span>
+          <button id="export-members" class="btn export-btn" type="button" aria-label="Export current group members to final.txt">Export</button>
         </div>
         <div class="bulk-input-wrap">
           <div id="bulk-input" class="bulk-editable" contenteditable="true" data-placeholder="alice@company.com&#10;bob@company.com" role="textbox" aria-multiline="true" aria-labelledby="bulk-label"></div>
@@ -222,6 +223,7 @@ app.innerHTML = `
 
 const bulkInput = document.querySelector<HTMLDivElement>("#bulk-input")!;
 const bulkCount = document.querySelector<HTMLSpanElement>("#bulk-count")!;
+const exportMembersBtn = document.querySelector<HTMLButtonElement>("#export-members")!;
 const addZone = document.querySelector<HTMLUListElement>("#add-zone")!;
 const removeZone = document.querySelector<HTMLUListElement>("#remove-zone")!;
 const addCount = document.querySelector<HTMLSpanElement>("#add-count")!;
@@ -457,6 +459,7 @@ function updateCounts(): void {
 function updateRunButtonStates(busy = isBusy): void {
   runAddBtn.disabled = busy || state.add.length === 0;
   runRemoveBtn.disabled = busy || state.remove.length === 0;
+  exportMembersBtn.disabled = busy;
 }
 
 function renderZone(target: QueueName): void {
@@ -704,6 +707,66 @@ async function runAction(action: QueueName): Promise<void> {
     rememberAuthSession();
 
     showProgressDone(result.successCount, result.failedCount);
+  } catch (error) {
+    log(String(error), true);
+    hideProgress();
+  } finally {
+    setBusy(false);
+    resetLayout(true);
+  }
+}
+
+/**
+ * Export the current member list of every configured group to final.txt.
+ * Runs the script in Export-only mode: no membership is modified. This is the
+ * only path that writes the member export — Run actions no longer export.
+ */
+async function exportMembers(): Promise<void> {
+  if (!canStartRun(guardState())) {
+    log(blockReason(guardState()) ?? "Cannot export right now.", true);
+    return;
+  }
+
+  const groups = saveGroupEmails(groupEmailInput.value);
+  if (!groups.length) {
+    log("Please enter at least one valid group email before exporting.", true);
+    return;
+  }
+  groupEmailInput.value = groups.join(", ");
+
+  const adminUpnValue = adminUpnInput.value.trim();
+  const adminUpn = adminUpnValue ? normalizeEmail(adminUpnValue) : null;
+  if (adminUpnValue && !adminUpn) {
+    log("Admin account email is invalid.", true);
+    return;
+  }
+  if (adminUpn) {
+    adminUpnInput.value = adminUpn;
+    saveAdminUpn(adminUpn);
+  }
+
+  const forceReconnect = !hasActiveAuthSession();
+  setBusy(true);
+  showProgressIndeterminate(`Exporting members for ${groups.length} group(s)...`);
+
+  try {
+    if (hasActiveAuthSession()) {
+      log("Reusing Microsoft admin auth session for this app session.");
+    } else {
+      log("Opening Microsoft sign-in window. Complete 2FA when prompted.");
+    }
+
+    const result = await invoke<GroupExportResult>("export_group_members", {
+      groupEmails: groups,
+      adminUpn: adminUpn ?? null,
+      forceReconnect
+    });
+
+    const cleanStdout = formatRunStdout(result.stdout ?? "");
+    if (cleanStdout) log(cleanStdout);
+    if (result.stderr) log(result.stderr, true);
+    rememberAuthSession();
+    showProgressDone(1, 0);
   } catch (error) {
     log(String(error), true);
     hideProgress();
@@ -1003,6 +1066,7 @@ undoSwapBtn.addEventListener("click", () => void undoSwapQueues());
 viewLogHistoryBtn.addEventListener("click", () => openLogHistory());
 runAddBtn.addEventListener("click", () => void runAction("add"));
 runRemoveBtn.addEventListener("click", () => void runAction("remove"));
+exportMembersBtn.addEventListener("click", () => void exportMembers());
 closeLogHistoryBtn.addEventListener("click", () => closeLogHistory());
 clearLogHistoryBtn.addEventListener("click", () => clearLogHistory());
 clearBulkInputBtn.addEventListener("click", () => clearBulkInput());

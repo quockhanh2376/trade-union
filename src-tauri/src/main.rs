@@ -67,6 +67,13 @@ struct PasswordChangeResult {
     stderr: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupExportResult {
+    stdout: String,
+    stderr: String,
+}
+
 #[derive(Deserialize)]
 struct PasswordResultJson {
     success: bool,
@@ -717,6 +724,97 @@ async fn run_group_action(
 }
 
 #[tauri::command]
+async fn export_group_members(
+    app: AppHandle,
+    group_emails: Vec<String>,
+    admin_upn: Option<String>,
+    force_reconnect: Option<bool>,
+) -> Result<GroupExportResult, String> {
+    let cleaned_admin_upn = match admin_upn {
+        Some(value) => Some(
+            normalize_email(&value).ok_or_else(|| "Invalid admin account email.".to_string())?,
+        ),
+        None => None,
+    };
+
+    let seed_file = list_file_path(&app, GroupAction::Add)?;
+    let output_file = final_file_path(&app)?;
+    let script = script_path(&app)?;
+    let bundled_modules = bundled_exchange_modules_path(&app)?;
+    let script_arg = powershell_compatible_path(&script);
+    let seed_file_arg = powershell_compatible_path(&seed_file);
+    let output_file_arg = powershell_compatible_path(&output_file);
+    let bundled_modules_arg = powershell_compatible_path(&bundled_modules);
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let groups = sanitize_group_input(group_emails);
+        if groups.is_empty() {
+            return Err("No valid distribution groups to export.".to_string());
+        }
+
+        if !script.exists() {
+            return Err(format!("Missing PowerShell script: {}", script.display()));
+        }
+
+        let group_arg = groups.join(", ");
+
+        let mut cmd = hidden_powershell_command();
+        cmd.arg("-NoLogo")
+            .arg("-NoProfile")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-File")
+            .arg(script_arg.as_os_str())
+            .arg("-Action")
+            .arg("Export")
+            .arg("-DistGroups")
+            .arg(&group_arg)
+            .arg("-InputFile")
+            .arg(seed_file_arg.as_os_str())
+            .arg("-OutputFile")
+            .arg(output_file_arg.as_os_str())
+            .arg("-BundledModulesPath")
+            .arg(bundled_modules_arg.as_os_str())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        if let Some(ref upn) = cleaned_admin_upn {
+            cmd.arg("-AdminUpn").arg(upn);
+        }
+
+        if force_reconnect.unwrap_or(false) {
+            cmd.arg("-ForceReconnect");
+        }
+
+        let output = match run_with_timeout(cmd, POWERSHELL_ACTION_TIMEOUT)? {
+            TimedOutput::Output(o) => o,
+            TimedOutput::TimedOut { partial, timeout } => {
+                let secs = timeout.as_secs();
+                let stdout = String::from_utf8_lossy(&partial.stdout).trim().to_string();
+                let stderr = String::from_utf8_lossy(&partial.stderr).trim().to_string();
+                return Err(build_command_error(
+                    &format!("Export timed out after {secs} seconds and was terminated."),
+                    &stdout,
+                    &stderr,
+                ));
+            }
+        };
+
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+        if !output.status.success() {
+            return Err(build_command_error("Export failed.", &stdout, &stderr));
+        }
+
+        Ok(GroupExportResult { stdout, stderr })
+    })
+    .await
+    .map_err(|err| format!("Background task failed: {err}"))?
+}
+
+#[tauri::command]
 async fn change_user_password(
     app: AppHandle,
     target_email: String,
@@ -832,6 +930,7 @@ fn main() {
             load_seed_emails,
             save_email_queues,
             run_group_action,
+            export_group_members,
             change_user_password
         ])
         .run(tauri::generate_context!())
