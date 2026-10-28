@@ -6,7 +6,8 @@ Guidance for ZCode agents working in this repository.
 
 **Trade Union Group Manager** — a Tauri v2 desktop app (Windows-focused) that manages
 members of Exchange Online **Distribution Groups** via two drag-and-drop queues
-(Add / Remove). Product identifier: `com.aswhite.tradeunion`. Current version: **2.0.4**.
+(Add / Remove) and provides self-service password management via Microsoft Graph.
+Product identifier: `com.aswhite.tradeunion`. Current version: **2.0.6**.
 
 The repo also contains a **legacy Python CLI** (`cli.py`, `trade_union.py`,
 `test_trade_union.py`) that is tracked but superseded by the Tauri app. `README.md`
@@ -20,16 +21,39 @@ still documents both; the active product is the Tauri app.
    (normalize/validate), `storage.ts` (localStorage/sessionStorage),
    `auth.ts` (in-memory auth-session cache), `constants.ts`, `types.ts`, `style.css`.
    Talks to the backend only via `invoke()` from `@tauri-apps/api/core`.
-2. **Backend** — Rust, single crate in `src-tauri/src/main.rs`. Exposes three
-   `#[tauri::command]`s: `load_seed_emails`, `save_email_queues`, `run_group_action`.
+2. **Backend** — Rust, single crate in `src-tauri/src/main.rs`. Exposes four
+   `#[tauri::command]`s: `load_seed_emails`, `save_email_queues`, `run_group_action`,
+   `change_user_password`.
    `run_group_action` shells out to PowerShell via `hidden_powershell_command()`.
 3. **PowerShell** — `src-tauri/scripts/*.ps1` drive Exchange Online
-   (`ExchangeOnlineManagement`). Modules are bundled offline under
-   `src-tauri/vendor/powershell-modules/` so no internet install is required.
+   (`manage_distribution_group.ps1` via `ExchangeOnlineManagement`) and Microsoft Graph
+   (`change_password.ps1` via `Microsoft.Graph.Users`). Exchange modules are bundled offline
+   under `src-tauri/vendor/powershell-modules/` so no internet install is required.
 
 **Layer rule:** frontend never touches files or Exchange directly; Rust never
 reaches into the DOM; PowerShell never imports app code. Frontend ↔ Rust contract
 is the set of `invoke`d command names.
+
+## Agent Guidelines: Ponytail & Superpowers Core Rules
+
+All agents working in this repository MUST adhere to these two golden methodologies:
+
+### 1. Ponytail Principles (Anti Over-Engineering & Minimalism)
+- **"The best code is the code you never wrote" (YAGNI)**: Question whether new code needs to exist at all.
+- **The Decision Ladder**: Before writing code or adding complexity:
+  1. Does the feature/refactor really need to exist?
+  2. Does the codebase already have a helper or pattern for it (e.g. `common.ps1`, `src/email.ts`)?
+  3. Can the standard library (`std`) or native platform built-in handle it?
+  4. Can it be written in the smallest, clearest contiguous change without extra abstraction?
+- **Minimal Change Rule**: Make the smallest change sufficient to solve the problem. Do not add speculative options, wrappers, or dead code. Actively remove obsolete code.
+
+### 2. Superpowers Principles (Plan-driven, Strict Checkpoints & TDD)
+- **Plan-Driven Execution**: Break complex problems into sequential phases with explicit checklist items (`- [ ]`) before modifying code.
+- **Strict Verification Checkpoints**: After EVERY phase, verify all 3 gates and report real command outputs:
+  1. `node --test tests/*.test.mjs`
+  2. `cargo test --manifest-path src-tauri/Cargo.toml`
+  3. `npm run build`
+- **TDD & Behavioral Invariant Guard**: Always protect changes with test assertions. When modifying UI/Rust/PowerShell contracts, update matching source-string assertions in `tests/*.test.mjs` and Rust tests simultaneously.
 
 ## Commands
 
@@ -48,8 +72,8 @@ npm run tauri -- build
 cargo check  --manifest-path src-tauri/Cargo.toml
 cargo test   --manifest-path src-tauri/Cargo.toml
 
-# Node source-string tests (see "Tests" gotcha below)
-node --test tests/
+# Node source-string tests (use exact wildcard pattern — 'tests/' fails on Node 24)
+node --test tests/*.test.mjs
 
 # Legacy Python (not the active product)
 python -m unittest test_trade_union.py
@@ -62,8 +86,9 @@ There is **no `npm test` script** — invoke the test runners directly as above.
 - **Keep versions in sync** across `package.json`, `src-tauri/Cargo.toml`, and
   `src-tauri/tauri.conf.json` when bumping a release. See `RELEASE_CHECKLIST_v1.1.0.md`.
 - **Emails are normalized to lowercase, deduped, and regex-validated.** This is
-  implemented in *both* layers (`normalizeEmail` in `src/email.ts`,
-  `normalize_email` / `sanitize_email_input` in `main.rs`) — change both together.
+  implemented in *all three* layers (`normalizeEmail` in `src/email.ts`,
+  `normalize_email` / `sanitize_email_input` in `main.rs`, `Test-ValidEmail` in `manage_distribution_group.ps1`)
+  — change all three together.
 - **Tauri command arg casing:** frontend calls with camelCase (`groupEmails`,
   `adminUpn`, `forceReconnect`); Rust params are snake_case (`group_emails`,
   `admin_upn`). Tauri converts automatically — keep the pairing.
@@ -94,7 +119,7 @@ tests. They pin button labels (`Add` / `Remove` / `▶ Run`), element IDs
 (`#clear-bulk-input`), CSS classes, function signatures, and arg names.
 
 When you change those surfaces, **also update the matching assertion** in the
-`.test.mjs` files, or `node --test tests/` will fail. Run it after UI/structural
+`.test.mjs` files, or `node --test tests/*.test.mjs` will fail. Run it after UI/structural
 edits.
 
 ## Windows installer invariants
