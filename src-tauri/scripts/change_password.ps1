@@ -3,9 +3,6 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$TargetUPN,
 
-    [Parameter(Mandatory = $true)]
-    [string]$NewPassword,
-
     [string]$AdminUPN = "",
 
     [switch]$ForceChangePasswordNextSignIn
@@ -41,7 +38,9 @@ if ([string]::IsNullOrWhiteSpace($TargetUPN)) {
     throw "Target email cannot be empty."
 }
 
-if ($NewPassword.Length -lt 8) {
+[Console]::InputEncoding = New-Object System.Text.UTF8Encoding $false
+$NewPassword = [Console]::In.ReadLine()
+if ([string]::IsNullOrEmpty($NewPassword) -or $NewPassword.Length -lt 8) {
     throw "New password must be at least 8 characters long."
 }
 
@@ -71,19 +70,10 @@ if (-not [string]::IsNullOrWhiteSpace($AdminUPN)) {
     $connectParams["LoginHint"] = $AdminUPN
 }
 
-$connectSucceeded = $false
 try {
     Connect-MgGraph @connectParams
-    $connectSucceeded = $true
 } catch {
-    Write-Warning "Standard interactive sign-in failed or prompt blocked. Trying device code flow..."
-    try {
-        Start-Process "https://login.microsoft.com/device" -ErrorAction SilentlyContinue
-        Connect-MgGraph -Scopes "User.ReadWrite.All" -UseDeviceCode -ContextScope Process -NoWelcome -ErrorAction Stop
-        $connectSucceeded = $true
-    } catch {
-        throw "Failed to authenticate with Microsoft Graph: $_"
-    }
+    throw "Microsoft Graph sign-in failed: $($_.Exception.Message)"
 }
 
 # ---- Password Update ----
