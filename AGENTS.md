@@ -9,10 +9,6 @@ members of Exchange Online **Distribution Groups** via two drag-and-drop queues
 (Add / Remove) and provides self-service password management via Microsoft Graph.
 Product identifier: `com.aswhite.tradeunion`. Current version: **2.0.6**.
 
-The repo also contains a **legacy Python CLI** (`cli.py`, `trade_union.py`,
-`test_trade_union.py`) that is tracked but superseded by the Tauri app. `README.md`
-still documents both; the active product is the Tauri app.
-
 ## Architecture (three layers — keep them separate)
 
 1. **Frontend** — vanilla TypeScript + Vite, *no framework*. UI is a single template
@@ -146,4 +142,4 @@ edits.
 - `project_analysis.md` — architecture overview (Vietnamese) + folder map.
 - `RELEASE_CHECKLIST_v1.1.0.md` — release/version-sync procedure.
 - `docs/superpowers/plans/` — historical design notes (e.g. hiding the PowerShell window).
-- `RELEASE_NOTES_*.md` — per-version changes; latest is `v2.0.1`.
+- `RELEASE_NOTES_*.md` — per-version changes; latest is `v2.0.6`.
