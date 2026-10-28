@@ -43,9 +43,8 @@ export interface ReconcileResult {
  *    it has an "ok" result for EVERY targeted group and no failure for any.
  *    This prevents removing an email that succeeded in one group but failed in
  *    another (multi-group runs).
- * 2. If details are empty (older script / no per-row output), fall back to the
- *    aggregate failedCount: when failedCount === 0, treat the whole payload as
- *    removable; otherwise remove nothing.
+ * 2. If details are empty (no per-row output), nothing is treated as removable
+ *    (fails safe to prevent data loss).
  * 3. Invalid/malformed detail rows (bad email or group) are ignored and never
  *    count toward success.
  *
@@ -83,10 +82,6 @@ export function resolveRemovableEmails(input: ReconcileInput): ReconcileResult {
       if (!record.hasFail && record.okGroups.size === expectedGroups) {
         removable.add(email);
       }
-    }
-  } else if (input.failedCount === 0) {
-    for (const email of input.payload) {
-      removable.add(email);
     }
   }
 

@@ -1,5 +1,32 @@
 # Trade Union Project Optimisation Report
 
+## 0. Review vòng 2 — 2026-10-28 (v2.0.6, commit `02aba0e` + working tree)
+
+Đọc lại toàn bộ `src/*.ts`, `src-tauri/src/main.rs`, `src-tauri/scripts/*.ps1`, `tauri.conf.json`, `New Feature/`. Phần lớn finding vòng 1 còn "OPEN" bên dưới thực tế **đã xử lý** trong code (F-09 CSP đã set, F-10 có `common.ps1`, F-14 event delegation, F-15 debounce, F-16 `ActionStatus`, F-17 CI, F-18 CSS) — bảng vòng 1 (Section 1–15) giữ nguyên làm lịch sử, cần cập nhật status khi rảnh.
+
+Các vấn đề **mới** (chủ yếu từ tab Change Password v2.0.6), xếp theo mức độ:
+
+| ID | Mức | Loại | Vị trí | Vấn đề | Hậu quả | Đề xuất |
+|----|-----|------|--------|--------|---------|---------|
+| R2-01 | **High** | Security | `src-tauri/src/main.rs:760-761` | Mật khẩu mới truyền qua command line `-NewPassword <pwd>` | Plaintext lộ qua Task Manager/WMI (`Win32_Process.CommandLine`), Event 4688 (nếu bật audit cmdline), PowerShell script-block/transcription log | Ghi password vào stdin (`Stdio::piped()` + `Read-Host`/`[Console]::In.ReadLine()` trong script) thay vì argument |
+| R2-02 | **High** | Correctness | `src-tauri/scripts/manage_distribution_group.ps1:28-30` vs `src/constants.ts:1` vs `main.rs:220-235` | 3 bộ validate email khác nhau. PS strict (`[a-zA-Z0-9._%+\-]`, TLD ≥2 chữ) loại email mà TS/Rust chấp nhận (vd `o'neil@x.com`, `a@b.c`) | Nếu PS skip hết payload → `details=[]`, `failed=0` → `resolveRemovableEmails` (rule 2, `run-reconciliation.ts:83`) **xóa toàn bộ queue như đã thành công** dù không chạy gì. Skip một phần → email nằm im trong queue không có dòng lỗi | ✅ **RESOLVED** (`73e383f` + R2-02b): Thống nhất regex `^[^\s@]+@[^\s@]+\.[^\s@]+$` cả 3 layer; PS ghi detail Fail; Rust trả Err khi thiếu RESULT_JSON; reconciliation không xóa khi details rỗng. |
+| R2-03 | **Low** | Correctness | `src/main.ts:140` + CSP `tauri.conf.json:22` | `<form onsubmit="return false;">` là inline handler — bị CSP `script-src 'self'` chặn nên là code chết + CSP violation trong console | Hiện tại chưa reload nhờ form có 2 ô text/password và không có nút submit (không implicit submit). Thêm/bớt 1 input hoặc đổi nút thành `type="submit"` → Enter sẽ reload webview, mất state | Bỏ `onsubmit` inline, thêm `addEventListener("submit", e => e.preventDefault())` |
+| R2-04 | **Medium** | Correctness | `src-tauri/scripts/change_password.ps1:51-54` | `Microsoft.Graph.Users` không được bundle (vendor chỉ có ExchangeOnlineManagement/PackageManagement/PowerShellGet) → `Install-Module` từ PSGallery lúc chạy | Máy offline / chặn PSGallery: tab Change Password fail; lần đầu cài rất chậm (module Graph lớn) trong khi UI chỉ hiện spinner | Bundle `Microsoft.Graph.Authentication` + `Microsoft.Graph.Users` vào `vendor/powershell-modules` và dùng `Add-BundledExchangeModulePath` tương tự |
+| R2-05 | **Medium** | Correctness | `change_password.ps1:81-83` + `main.rs:763` | Fallback device-code: mã đăng nhập được in ra stdout, nhưng stdout bị pipe vào Rust | User không thấy device code ở console minimized → treo tới timeout 15 phút | Bỏ fallback device-code, hoặc trả mã về UI qua dòng `DEVICE_CODE:` |
+| R2-06 | **Medium** | Reuse | `main.rs:129-212`, `318-378` | 3 hàm resolve path (`script_path`, `change_password_script_path`, `bundled_exchange_modules_path`) gần như copy-paste; 2 lần probe `pwsh.exe` với 2 `OnceLock` riêng | Fix path phải sửa 3 chỗ; probe trong `interactive_powershell_command` **thiếu `CREATE_NO_WINDOW`** → nháy cửa sổ console | `fn resource_path(app, rel: &str)` dùng chung; `fn powershell_exe() -> &'static str` với 1 `OnceLock` |
+| R2-07 | **Low** | Correctness | `main.rs:801` | Phân biệt lỗi bằng so sánh chuỗi `parsed_msg == "Failed to change password."` | Đổi text mặc định là logic lỗi đổi theo; script `throw` (vd sign-in fail) bị gộp chung | Dùng `parse_password_result_json(..).is_none() && !status.success()` |
+| R2-08 | **Low** | Correctness | `main.rs:730` vs `main.ts:875` | Rust kiểm `trim().len() < 8`, TS kiểm `length < 8` | `"       x"` qua TS nhưng Rust báo lỗi khác; độ dài tính theo byte UTF-8 ở Rust, UTF-16 ở TS | Cùng một rule, không `trim()` password |
+| R2-09 | **Low** | Correctness | `main.ts:881-882` | Admin UPN không hợp lệ ở tab Password bị âm thầm đổi thành `null` | Đăng nhập không có login hint, user không biết | Báo lỗi giống `runAction` (`main.ts:634`) |
+| R2-10 | **Low** | Efficiency | `main.ts:408-416`, `storage.ts:72` | Mỗi `log()` stringify + ghi toàn bộ 5000 dòng history vào localStorage; `logBox.textContent` nối chuỗi vô hạn | `log(result.stdout)` lớn → chậm, dễ chạm quota 5MB (lỗi bị nuốt → mất log); log box O(N²) theo phiên | Debounce `saveLogHistory`, giới hạn số dòng của `logBox` |
+| R2-11 | **Low** | Efficiency/Dead code | `manage_distribution_group.ps1:191-206`, `main.rs:111` | Export member list (`final.txt`) sau mỗi group, ghi đè nhau, không ai đọc | Thêm 1 call Exchange/group; `Get-DistributionGroupMember` không `-ResultSize Unlimited` → cắt ở 1000 | Xóa bước export (hoặc đọc nó thật sự) |
+| R2-12 | **Low** | Dead code | `src-tauri/scripts/detect_group_type.ps1`, `tauri.conf.json:34` | Script được bundle nhưng Rust không bao giờ gọi | Tăng kích thước bundle, phải giữ đồng bộ với test | Xóa script + entry resources + test loop |
+| R2-13 | **Low** | Hygiene/Security | `New Feature/Change_password_MFA.ps1` | Prototype tracked: hard-code admin UPN, đọc password plaintext từ `password.txt`, tự elevate admin; working tree thêm 1 dòng comment trùng | Nhầm với script thật; khuyến khích lưu password plaintext | Xóa folder `New Feature/` khỏi repo (tính năng đã có ở `change_password.ps1`) |
+| R2-14 | **Info** | Docs | `AGENTS.md` | Ghi "Current version 2.0.4", "three commands" — thực tế 2.0.6 và 4 command (`change_user_password`) | Agent/dev đọc sai contract | ✅ **RESOLVED**: Cập nhật AGENTS.md lên v2.0.6, 4 commands, script Graph, sửa lệnh test wildcard và bổ sung 2 quy tắc vàng Ponytail + Superpowers. |
+
+**Ưu tiên đề xuất:** R2-02 (mất dữ liệu queue) → R2-01 (lộ password) → R2-04/R2-05 → R2-06 → phần còn lại.
+
+---
+
 ## 1. Executive Summary
 
 **Trade Union Group Manager** là desktop app (Tauri v2 + TypeScript + Rust + PowerShell) quản lý thành viên Exchange Online Distribution Group qua 2 queue Add/Remove. Version hiện tại **v2.0.5**, branch `main`, đồng bộ hoàn toàn với remote.
