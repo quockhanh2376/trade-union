@@ -38,6 +38,7 @@ if ([string]::IsNullOrWhiteSpace($TargetUPN)) {
     throw "Target email cannot be empty."
 }
 
+[Console]::InputEncoding = New-Object System.Text.UTF8Encoding $false
 $NewPassword = [Console]::In.ReadLine()
 if ([string]::IsNullOrEmpty($NewPassword) -or $NewPassword.Length -lt 8) {
     throw "New password must be at least 8 characters long."

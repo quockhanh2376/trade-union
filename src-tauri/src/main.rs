@@ -774,6 +774,16 @@ async fn export_group_members(
     .map_err(|err| format!("Background task failed: {err}"))?
 }
 
+fn validate_new_password(pwd: &str) -> Result<(), String> {
+    if pwd.contains('\r') || pwd.contains('\n') {
+        return Err("Password must not contain line breaks.".to_string());
+    }
+    if pwd.trim().len() < 8 {
+        return Err("Password must be at least 8 characters long.".to_string());
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn change_user_password(
     app: AppHandle,
@@ -785,9 +795,7 @@ async fn change_user_password(
     let cleaned_target_email = normalize_email(&target_email)
         .ok_or_else(|| "Invalid target user email.".to_string())?;
 
-    if new_password.trim().len() < 8 {
-        return Err("Password must be at least 8 characters long.".to_string());
-    }
+    validate_new_password(&new_password)?;
 
     let cleaned_admin_upn = match admin_upn {
         Some(value) if !value.trim().is_empty() => Some(
@@ -1009,6 +1017,58 @@ mod tests {
             !script.contains("-UseDeviceCode"),
             "change_password.ps1 must not use device code fallback"
         );
+        let enc_idx = script
+            .find("InputEncoding")
+            .expect("change_password.ps1 must configure InputEncoding before reading stdin");
+        let readline_idx = script
+            .find("[Console]::In.ReadLine()")
+            .expect("change_password.ps1 must read password using [Console]::In.ReadLine()");
+        assert!(
+            enc_idx < readline_idx,
+            "InputEncoding configuration must appear before [Console]::In.ReadLine()"
+        );
+    }
+
+    #[test]
+    fn validate_new_password_rejects_line_breaks_and_short_lengths() {
+        assert_eq!(
+            validate_new_password("password\n123"),
+            Err("Password must not contain line breaks.".to_string())
+        );
+        assert_eq!(
+            validate_new_password("password\r123"),
+            Err("Password must not contain line breaks.".to_string())
+        );
+        assert_eq!(
+            validate_new_password("password\r\n123"),
+            Err("Password must not contain line breaks.".to_string())
+        );
+        assert_eq!(
+            validate_new_password("short"),
+            Err("Password must be at least 8 characters long.".to_string())
+        );
+        assert!(validate_new_password("valid-password-123").is_ok());
+        assert!(validate_new_password("Mật-khẩu-é€1").is_ok());
+    }
+
+    #[test]
+    fn run_with_timeout_decodes_utf8_stdin_correctly() {
+        let mut cmd = hidden_powershell_command();
+        cmd.arg("-NoLogo")
+            .arg("-NoProfile")
+            .arg("-Command")
+            .arg("[Console]::InputEncoding = New-Object System.Text.UTF8Encoding $false; $line = [Console]::In.ReadLine(); Write-Output ($line -eq 'Mật-khẩu-é€1')")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let input_bytes = "Mật-khẩu-é€1".as_bytes().to_vec();
+        let output = match run_with_timeout(cmd, Duration::from_secs(10), Some(input_bytes)).expect("run ok") {
+            TimedOutput::Output(o) => o,
+            TimedOutput::TimedOut { .. } => panic!("timed out"),
+        };
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        assert_eq!(stdout, "True");
     }
 
     #[test]
