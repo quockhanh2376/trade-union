@@ -375,7 +375,15 @@ enum TimedOutput {
 /// (e.g. the Microsoft sign-in browser spawned by Exchange). Those descendants
 /// are expected to exit on their own once PowerShell is killed, but this
 /// helper does not perform a job-object/tree kill.
-fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<TimedOutput, String> {
+fn run_with_timeout(
+    mut cmd: Command,
+    timeout: Duration,
+    stdin_input: Option<Vec<u8>>,
+) -> Result<TimedOutput, String> {
+    if stdin_input.is_some() {
+        cmd.stdin(Stdio::piped());
+    }
+
     let mut child = cmd
         .spawn()
         .map_err(|err| format!("Failed to launch process: {err}"))?;
@@ -406,6 +414,33 @@ fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<TimedOutput, 
     let stderr_thread = thread::spawn(move || {
         let _ = stderr_tx.send(read_all(stderr_handle));
     });
+
+    if let Some(bytes) = stdin_input {
+        match child.stdin.take() {
+            Some(mut stdin) => {
+                use std::io::Write;
+                let write_res = stdin
+                    .write_all(&bytes)
+                    .and_then(|_| stdin.write_all(b"\n"))
+                    .and_then(|_| stdin.flush());
+                drop(stdin);
+                if let Err(err) = write_res {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = recv_join(stdout_thread, &stdout_rx);
+                    let _ = recv_join(stderr_thread, &stderr_rx);
+                    return Err(format!("Failed to write to process stdin: {err}"));
+                }
+            }
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = recv_join(stdout_thread, &stdout_rx);
+                let _ = recv_join(stderr_thread, &stderr_rx);
+                return Err("Failed to open child process stdin pipe".to_string());
+            }
+        }
+    }
 
     match child.wait_timeout(timeout) {
         Ok(Some(status)) => {
@@ -595,7 +630,7 @@ async fn run_group_action(
             cmd.arg("-ForceReconnect");
         }
 
-        let output = match run_with_timeout(cmd, POWERSHELL_ACTION_TIMEOUT)? {
+        let output = match run_with_timeout(cmd, POWERSHELL_ACTION_TIMEOUT, None)? {
             TimedOutput::Output(o) => o,
             TimedOutput::TimedOut { partial, timeout } => {
                 let secs = timeout.as_secs();
@@ -712,7 +747,7 @@ async fn export_group_members(
             cmd.arg("-ForceReconnect");
         }
 
-        let output = match run_with_timeout(cmd, POWERSHELL_ACTION_TIMEOUT)? {
+        let output = match run_with_timeout(cmd, POWERSHELL_ACTION_TIMEOUT, None)? {
             TimedOutput::Output(o) => o,
             TimedOutput::TimedOut { partial, timeout } => {
                 let secs = timeout.as_secs();
@@ -780,9 +815,6 @@ async fn change_user_password(
             .arg(script_arg.as_os_str())
             .arg("-TargetUPN")
             .arg(&cleaned_target_email)
-            .arg("-NewPassword")
-            .arg(&new_password)
-            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
@@ -794,7 +826,11 @@ async fn change_user_password(
             cmd.arg("-ForceChangePasswordNextSignIn");
         }
 
-        let output = match run_with_timeout(cmd, POWERSHELL_ACTION_TIMEOUT)? {
+        let output = match run_with_timeout(
+            cmd,
+            POWERSHELL_ACTION_TIMEOUT,
+            Some(new_password.into_bytes()),
+        )? {
             TimedOutput::Output(o) => o,
             TimedOutput::TimedOut { partial, timeout } => {
                 let secs = timeout.as_secs();
@@ -961,6 +997,59 @@ mod tests {
             script.contains("User.ReadWrite.All"),
             "change_password.ps1 must request User.ReadWrite.All scope"
         );
+        assert!(
+            !script.contains("[string]$NewPassword"),
+            "change_password.ps1 must not accept password as command-line parameter"
+        );
+        assert!(
+            script.contains("[Console]::In.ReadLine()"),
+            "change_password.ps1 must read password from stdin"
+        );
+        assert!(
+            !script.contains("-UseDeviceCode"),
+            "change_password.ps1 must not use device code fallback"
+        );
+    }
+
+    #[test]
+    fn run_with_timeout_passes_stdin_when_provided() {
+        let mut cmd = hidden_powershell_command();
+        cmd.arg("-NoLogo")
+            .arg("-NoProfile")
+            .arg("-Command")
+            .arg("$line = [Console]::In.ReadLine(); if ($null -eq $line) { Write-Output 0 } else { Write-Output $line.Length }")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let input_bytes = b"SecretPassword123!".to_vec();
+        let expected_len = input_bytes.len();
+        let output = match run_with_timeout(cmd, Duration::from_secs(10), Some(input_bytes)).expect("run ok") {
+            TimedOutput::Output(o) => o,
+            TimedOutput::TimedOut { .. } => panic!("timed out"),
+        };
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        assert_eq!(stdout, expected_len.to_string());
+    }
+
+    #[test]
+    fn run_with_timeout_none_stdin_reads_as_empty_or_null() {
+        let mut cmd = hidden_powershell_command();
+        cmd.arg("-NoLogo")
+            .arg("-NoProfile")
+            .arg("-Command")
+            .arg("$line = [Console]::In.ReadLine(); if ($null -eq $line -or $line -eq '') { Write-Output 'EMPTY' } else { Write-Output $line }")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let output = match run_with_timeout(cmd, Duration::from_secs(10), None).expect("run ok") {
+            TimedOutput::Output(o) => o,
+            TimedOutput::TimedOut { .. } => panic!("timed out"),
+        };
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        assert_eq!(stdout, "EMPTY");
     }
 
     // ── run_with_timeout tests (F-06) ──────────────────────────────
@@ -992,7 +1081,7 @@ mod tests {
         } else {
             "printf hello"
         });
-        let result = run_with_timeout(cmd, Duration::from_secs(5));
+        let result = run_with_timeout(cmd, Duration::from_secs(5), None);
         match result.expect("fast process should not error") {
             TimedOutput::Output(o) => {
                 assert!(o.status.success(), "fast echo should succeed");
@@ -1010,7 +1099,7 @@ mod tests {
         // Exit code 3 — non-zero but a normal exit (not timeout, not spawn error).
         let line = if cfg!(windows) { "exit /B 3" } else { "exit 3" };
         let cmd = shell_command(line);
-        let result = run_with_timeout(cmd, Duration::from_secs(5));
+        let result = run_with_timeout(cmd, Duration::from_secs(5), None);
         match result.expect("non-zero exit should not error") {
             TimedOutput::Output(o) => {
                 assert_eq!(o.status.code(), Some(3), "exit code should be 3");
@@ -1029,7 +1118,7 @@ mod tests {
             "printf 'out-msg\\n'; printf 'err-msg\\n' 1>&2"
         };
         let cmd = shell_command(line);
-        match run_with_timeout(cmd, Duration::from_secs(5)).expect("ok") {
+        match run_with_timeout(cmd, Duration::from_secs(5), None).expect("ok") {
             TimedOutput::Output(o) => {
                 let out = String::from_utf8_lossy(&o.stdout);
                 let err = String::from_utf8_lossy(&o.stderr);
@@ -1047,7 +1136,7 @@ mod tests {
         cmd.stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let result = run_with_timeout(cmd, Duration::from_secs(5));
+        let result = run_with_timeout(cmd, Duration::from_secs(5), None);
         assert!(
             result.is_err(),
             "spawn failure should return Err, got: {result:?}"
@@ -1088,7 +1177,7 @@ mod tests {
             .stderr(Stdio::piped());
         let timeout = Duration::from_secs(1);
         let start = std::time::Instant::now();
-        let result = run_with_timeout(cmd, timeout);
+        let result = run_with_timeout(cmd, timeout, None);
         let elapsed = start.elapsed();
 
         match result.expect("timeout path should not return Err") {
@@ -1118,7 +1207,7 @@ mod tests {
         };
         let cmd = shell_command(line);
         let start = std::time::Instant::now();
-        let result = run_with_timeout(cmd, Duration::from_secs(20));
+        let result = run_with_timeout(cmd, Duration::from_secs(20), None);
         let elapsed = start.elapsed();
 
         match result.expect("large output should not error") {
@@ -1152,7 +1241,7 @@ mod tests {
         };
         let cmd = shell_command(line);
         let start = std::time::Instant::now();
-        let result = run_with_timeout(cmd, Duration::from_secs(20));
+        let result = run_with_timeout(cmd, Duration::from_secs(20), None);
         let elapsed = start.elapsed();
 
         match result.expect("large stderr should not error") {
@@ -1189,7 +1278,7 @@ mod tests {
         };
         let cmd = shell_command(line);
         let start = std::time::Instant::now();
-        let result = run_with_timeout(cmd, Duration::from_secs(20));
+        let result = run_with_timeout(cmd, Duration::from_secs(20), None);
         let elapsed = start.elapsed();
 
         match result.expect("dual large output should not error") {
@@ -1243,7 +1332,7 @@ mod tests {
             .stderr(Stdio::piped());
         let timeout = Duration::from_secs(2);
         let start = std::time::Instant::now();
-        let result = run_with_timeout(cmd, timeout);
+        let result = run_with_timeout(cmd, timeout, None);
         let elapsed = start.elapsed();
 
         match result.expect("partial-then-timeout should not error") {
