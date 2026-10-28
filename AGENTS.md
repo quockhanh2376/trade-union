@@ -90,7 +90,7 @@ There is **no `npm test` script** — invoke the test runners directly as above.
   `admin_upn`). Tauri converts automatically — keep the pairing.
 - **Bundle new scripts/modules** by adding them to `bundle.resources` in
   `tauri.conf.json` and resolving them in Rust via `BaseDirectory::Resource`
-  (see `script_path` / `bundled_exchange_modules_path`).
+  (see `resolve_resource`).
 
 ## Hard constraints (enforced by `cargo test`)
 

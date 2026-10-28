@@ -38,8 +38,11 @@ test("installer bundles offline ExchangeOnlineManagement module resources", asyn
 });
 
 test("backend passes bundled module path into Exchange action scripts", () => {
-  assert.match(mainSource, /fn bundled_exchange_modules_path\(app: &AppHandle\) -> Result<PathBuf, String>/);
-  assert.match(mainSource, /\.resolve\("vendor\/powershell-modules", BaseDirectory::Resource\)/);
+  assert.match(mainSource, /fn resolve_resource\(app: &AppHandle, rel: &str\) -> Result<PathBuf, String>/);
+  assert.match(mainSource, /resolve_resource\(&app, "vendor\/powershell-modules"\)/);
+  assert.match(mainSource, /resolve_resource\(&app, "scripts\/manage_distribution_group\.ps1"\)/);
+  assert.match(mainSource, /resolve_resource\(&app, "scripts\/change_password\.ps1"\)/);
+  assert.match(mainSource, /\.resolve\(rel, BaseDirectory::Resource\)/);
   assert.match(mainSource, /\.arg\("-BundledModulesPath"\)/);
   assert.match(mainSource, /\.arg\(bundled_modules_arg\.as_os_str\(\)\)/);
 });
