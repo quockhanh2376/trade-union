@@ -119,26 +119,9 @@ fn final_file_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app_data_dir(app)?.join("final.txt"))
 }
 
-fn workspace_script_path() -> PathBuf {
-    workspace_root()
-        .join("src-tauri")
-        .join("scripts")
-        .join("manage_distribution_group.ps1")
-}
-
-fn workspace_bundled_exchange_modules_path() -> PathBuf {
-    workspace_root()
-        .join("src-tauri")
-        .join("vendor")
-        .join("powershell-modules")
-}
-
-fn script_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn resolve_resource(app: &AppHandle, rel: &str) -> Result<PathBuf, String> {
     if let Ok(path) = std::env::var("TRADE_UNION_ROOT") {
-        let candidate = PathBuf::from(path)
-            .join("src-tauri")
-            .join("scripts")
-            .join("manage_distribution_group.ps1");
+        let candidate = PathBuf::from(path).join("src-tauri").join(rel);
         if candidate.exists() {
             return Ok(candidate);
         }
@@ -146,76 +129,18 @@ fn script_path(app: &AppHandle) -> Result<PathBuf, String> {
 
     let resource_path = app
         .path()
-        .resolve(
-            "scripts/manage_distribution_group.ps1",
-            BaseDirectory::Resource,
-        )
-        .map_err(|err| format!("Cannot resolve bundled PowerShell script: {err}"))?;
+        .resolve(rel, BaseDirectory::Resource)
+        .map_err(|err| format!("Cannot resolve bundled resource '{rel}': {err}"))?;
     if resource_path.exists() {
         return Ok(resource_path);
     }
 
-    let dev_path = workspace_script_path();
+    let dev_path = workspace_root().join("src-tauri").join(rel);
     if dev_path.exists() {
         return Ok(dev_path);
     }
 
     Ok(resource_path)
-}
-
-fn change_password_script_path(app: &AppHandle) -> Result<PathBuf, String> {
-    if let Ok(path) = std::env::var("TRADE_UNION_ROOT") {
-        let candidate = PathBuf::from(path)
-            .join("src-tauri")
-            .join("scripts")
-            .join("change_password.ps1");
-        if candidate.exists() {
-            return Ok(candidate);
-        }
-    }
-
-    let resource_path = app
-        .path()
-        .resolve(
-            "scripts/change_password.ps1",
-            BaseDirectory::Resource,
-        )
-        .map_err(|err| format!("Cannot resolve bundled PowerShell script: {err}"))?;
-    if resource_path.exists() {
-        return Ok(resource_path);
-    }
-
-    let dev_path = workspace_root()
-        .join("src-tauri")
-        .join("scripts")
-        .join("change_password.ps1");
-    if dev_path.exists() {
-        return Ok(dev_path);
-    }
-
-    Ok(resource_path)
-}
-
-fn bundled_exchange_modules_path(app: &AppHandle) -> Result<PathBuf, String> {
-    if let Ok(path) = std::env::var("TRADE_UNION_ROOT") {
-        let candidate = PathBuf::from(path)
-            .join("src-tauri")
-            .join("vendor")
-            .join("powershell-modules");
-        if candidate.exists() {
-            return Ok(candidate);
-        }
-    }
-
-    let resource_path = app
-        .path()
-        .resolve("vendor/powershell-modules", BaseDirectory::Resource)
-        .map_err(|err| format!("Cannot resolve bundled PowerShell modules: {err}"))?;
-    if resource_path.exists() {
-        return Ok(resource_path);
-    }
-
-    Ok(workspace_bundled_exchange_modules_path())
 }
 
 fn legacy_credential_file_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -332,12 +257,10 @@ fn powershell_compatible_path(path: &Path) -> PathBuf {
 }
 
 #[cfg(windows)]
-fn hidden_powershell_command() -> Command {
+fn powershell_exe() -> &'static str {
     use std::os::windows::process::CommandExt;
-
     const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-    // Prefer PowerShell 7 (pwsh.exe) when available — better ExchangeOnlineManagement support
     static PWSH_AVAILABLE: OnceLock<bool> = OnceLock::new();
     let use_pwsh = *PWSH_AVAILABLE.get_or_init(|| {
         Command::new("pwsh.exe")
@@ -351,51 +274,38 @@ fn hidden_powershell_command() -> Command {
             .unwrap_or(false)
     });
 
-    let exe = if use_pwsh {
+    if use_pwsh {
         "pwsh.exe"
     } else {
         "powershell.exe"
-    };
-    let mut cmd = Command::new(exe);
-    cmd.creation_flags(CREATE_NO_WINDOW);
-    cmd
+    }
 }
 
 #[cfg(not(windows))]
+fn powershell_exe() -> &'static str {
+    "powershell"
+}
+
 fn hidden_powershell_command() -> Command {
-    Command::new("powershell")
-}
-
-#[cfg(windows)]
-fn interactive_powershell_command() -> Command {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NEW_CONSOLE: u32 = 0x00000010;
-
-    static PWSH_AVAILABLE: OnceLock<bool> = OnceLock::new();
-    let use_pwsh = *PWSH_AVAILABLE.get_or_init(|| {
-        Command::new("pwsh.exe")
-            .args(["-NoProfile", "-Command", "exit 0"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    });
-
-    let exe = if use_pwsh {
-        "pwsh.exe"
-    } else {
-        "powershell.exe"
-    };
-    let mut cmd = Command::new(exe);
-    cmd.creation_flags(CREATE_NEW_CONSOLE);
+    let mut cmd = Command::new(powershell_exe());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
     cmd
 }
 
-#[cfg(not(windows))]
 fn interactive_powershell_command() -> Command {
-    Command::new("powershell")
+    let mut cmd = Command::new(powershell_exe());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_CONSOLE: u32 = 0x00000010;
+        cmd.creation_flags(CREATE_NEW_CONSOLE);
+    }
+    cmd
 }
 
 fn parse_result_json(stdout: &str) -> Option<(usize, usize, usize, Vec<ActionDetail>)> {
@@ -629,8 +539,8 @@ async fn run_group_action(
 
     let queue_file = list_file_path(&app, action)?;
     let output_file = final_file_path(&app)?;
-    let script = script_path(&app)?;
-    let bundled_modules = bundled_exchange_modules_path(&app)?;
+    let script = resolve_resource(&app, "scripts/manage_distribution_group.ps1")?;
+    let bundled_modules = resolve_resource(&app, "vendor/powershell-modules")?;
     let script_arg = powershell_compatible_path(&script);
     let queue_file_arg = powershell_compatible_path(&queue_file);
     let output_file_arg = powershell_compatible_path(&output_file);
@@ -754,8 +664,8 @@ async fn export_group_members(
 
     let seed_file = list_file_path(&app, GroupAction::Add)?;
     let output_file = final_file_path(&app)?;
-    let script = script_path(&app)?;
-    let bundled_modules = bundled_exchange_modules_path(&app)?;
+    let script = resolve_resource(&app, "scripts/manage_distribution_group.ps1")?;
+    let bundled_modules = resolve_resource(&app, "vendor/powershell-modules")?;
     let script_arg = powershell_compatible_path(&script);
     let seed_file_arg = powershell_compatible_path(&seed_file);
     let output_file_arg = powershell_compatible_path(&output_file);
@@ -851,7 +761,7 @@ async fn change_user_password(
         _ => None,
     };
 
-    let script = change_password_script_path(&app)?;
+    let script = resolve_resource(&app, "scripts/change_password.ps1")?;
     let script_arg = powershell_compatible_path(&script);
 
     tauri::async_runtime::spawn_blocking(move || {
@@ -1402,5 +1312,11 @@ mod tests {
     fn parse_result_json_returns_none_on_malformed_json() {
         let stdout = "RESULT_JSON:{not valid json}";
         assert!(parse_result_json(stdout).is_none());
+    }
+
+    #[test]
+    fn powershell_exe_returns_non_empty_name() {
+        let exe = powershell_exe();
+        assert!(exe == "pwsh.exe" || exe == "powershell.exe" || exe == "powershell");
     }
 }
