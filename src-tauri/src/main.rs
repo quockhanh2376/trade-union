@@ -219,7 +219,10 @@ fn legacy_credential_file_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn normalize_email(email: &str) -> Option<String> {
     let trimmed = email.trim().to_ascii_lowercase();
-    if trimmed.is_empty() || !trimmed.contains('@') {
+    if trimmed.is_empty()
+        || trimmed.chars().any(|c| c.is_whitespace())
+        || !trimmed.contains('@')
+    {
         return None;
     }
 
@@ -227,7 +230,13 @@ fn normalize_email(email: &str) -> Option<String> {
     let local = parts.next().unwrap_or_default();
     let domain = parts.next().unwrap_or_default();
 
-    if local.is_empty() || domain.is_empty() || parts.next().is_some() || !domain.contains('.') {
+    if local.is_empty()
+        || domain.is_empty()
+        || parts.next().is_some()
+        || !domain.contains('.')
+        || domain.starts_with('.')
+        || domain.ends_with('.')
+    {
         return None;
     }
 
@@ -1246,5 +1255,35 @@ mod tests {
     fn powershell_action_timeout_is_fifteen_minutes() {
         // Pin the configured timeout so a future change is conscious.
         assert_eq!(POWERSHELL_ACTION_TIMEOUT, Duration::from_secs(15 * 60));
+    }
+
+    #[test]
+    fn normalize_email_accepts_valid_emails_and_apostrophes() {
+        assert_eq!(
+            normalize_email("  Alice@Example.COM  "),
+            Some("alice@example.com".to_string())
+        );
+        assert_eq!(
+            normalize_email("o'neil@x.com"),
+            Some("o'neil@x.com".to_string())
+        );
+        assert_eq!(
+            normalize_email("user+tag@sub.domain.co"),
+            Some("user+tag@sub.domain.co".to_string())
+        );
+    }
+
+    #[test]
+    fn normalize_email_rejects_invalid_inputs() {
+        assert_eq!(normalize_email(""), None);
+        assert_eq!(normalize_email("   "), None);
+        assert_eq!(normalize_email("not-an-email"), None);
+        assert_eq!(normalize_email("missing@tld"), None);
+        assert_eq!(normalize_email("@example.com"), None);
+        assert_eq!(normalize_email("alice@"), None);
+        assert_eq!(normalize_email("alice@example"), None);
+        assert_eq!(normalize_email("alice bob@x.com"), None);
+        assert_eq!(normalize_email("alice@x."), None);
+        assert_eq!(normalize_email("alice@.com"), None);
     }
 }

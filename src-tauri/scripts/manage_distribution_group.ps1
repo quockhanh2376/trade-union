@@ -26,17 +26,21 @@ $ErrorActionPreference = "Stop"
 
 function Test-ValidEmail {
     param([string]$Email)
-    return $Email -match "^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$"
+    return $Email -match "^[^\s@]+@[^\s@]+\.[^\s@]+$"
 }
 
 function Read-EmailList {
     param([string]$Path)
 
     if (-not (Test-Path -Path $Path)) {
-        return @()
+        return [PSCustomObject]@{
+            Valid = @()
+            Invalid = @()
+        }
     }
 
-    $items = New-Object System.Collections.Generic.List[string]
+    $validItems = New-Object System.Collections.Generic.List[string]
+    $invalidItems = New-Object System.Collections.Generic.List[string]
     $unique = New-Object System.Collections.Generic.HashSet[string]
 
     foreach ($line in (Get-Content -Path $Path -ErrorAction Stop)) {
@@ -46,14 +50,20 @@ function Read-EmailList {
         }
         if (-not (Test-ValidEmail -Email $value)) {
             Write-Host "Skipping invalid email: $value" -ForegroundColor Yellow
+            if ($unique.Add($value)) {
+                $invalidItems.Add($value) | Out-Null
+            }
             continue
         }
         if ($unique.Add($value)) {
-            $items.Add($value) | Out-Null
+            $validItems.Add($value) | Out-Null
         }
     }
 
-    return $items.ToArray()
+    return [PSCustomObject]@{
+        Valid = $validItems.ToArray()
+        Invalid = $invalidItems.ToArray()
+    }
 }
 
 function Read-GroupList {
@@ -126,8 +136,10 @@ try {
         throw "No valid distribution groups found."
     }
 
-    $emails = Read-EmailList -Path $InputFile
-    if ($emails.Count -eq 0) {
+    $emailData = Read-EmailList -Path $InputFile
+    $emails = $emailData.Valid
+    $invalidEmails = $emailData.Invalid
+    if ($emails.Count -eq 0 -and $invalidEmails.Count -eq 0) {
         Write-Host "No valid emails found in $InputFile"
     }
 
@@ -139,6 +151,22 @@ try {
     $groupIndex = 0
     $lastExportedGroup = $null
     $details = New-Object System.Collections.Generic.List[object]
+
+    # R2-02: Record invalid emails as failed details so queue reconciliation
+    # does not silently remove them or falsely report 0 failures.
+    foreach ($invalidEmail in $invalidEmails) {
+        foreach ($group in $groups) {
+            $failedCount++
+            $processedCount++
+            $details.Add([PSCustomObject]@{
+                    email = $invalidEmail
+                    group = $group
+                    status = "Fail"
+                    message = "Invalid email format"
+                }) | Out-Null
+            Write-Host "$Action failed [$group]: $invalidEmail (invalid email format)" -ForegroundColor Red
+        }
+    }
 
     foreach ($group in $groups) {
         $groupIndex++

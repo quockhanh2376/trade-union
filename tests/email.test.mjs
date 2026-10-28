@@ -38,6 +38,11 @@ test("normalizeEmail preserves plus-addressing and subdomains", () => {
   assert.equal(normalizeEmail("Alice+tag@Sub.Example.com"), "alice+tag@sub.example.com");
 });
 
+test("normalizeEmail accepts apostrophes in local part", () => {
+  assert.equal(normalizeEmail("o'neil@x.com"), "o'neil@x.com");
+  assert.equal(normalizeEmail("O'Connor@Example.com"), "o'connor@example.com");
+});
+
 // ── parseEmails ─────────────────────────────────────────────────────
 
 test("parseEmails splits on whitespace, commas, and semicolons", () => {
