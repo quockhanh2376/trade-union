@@ -5,7 +5,11 @@ export default defineConfig({
   envPrefix: ["VITE_", "TAURI_"],
   server: {
     port: 1420,
-    strictPort: true
+    strictPort: true,
+    watch: {
+      // Cargo build artifacts crash chokidar on Windows (EBUSY on locked .exe)
+      ignored: ["**/src-tauri/target/**"]
+    }
   },
   build: {
     target: ["es2021", "chrome105", "safari13"]

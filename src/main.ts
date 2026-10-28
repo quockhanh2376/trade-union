@@ -1,9 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import "./style.css";
-import type { QueueName, GroupRunResult, ActionDetail, ActionStatus, SeedEmails, PasswordChangeResult } from "./types.ts";
+import type { QueueName, GroupRunResult, GroupExportResult, ActionDetail, ActionStatus, SeedEmails, PasswordChangeResult } from "./types.ts";
 import { LOG_HISTORY_MAX_LINES } from "./constants.ts";
 import { normalizeEmail, parseEmails, escapeHtml, sanitizeEmailInput } from "./email.ts";
+import { formatRunStdout } from "./log-format.ts";
 import {
   loadStoredGroupEmails,
   saveGroupEmails,
@@ -66,6 +67,7 @@ app.innerHTML = `
         <div class="bulk-label-row">
           <span id="bulk-label">Email List</span>
           <span id="bulk-count" class="bulk-count-circle is-empty" title="Total emails in list" role="status" aria-label="Email count">0</span>
+          <button id="export-members" class="btn export-btn" type="button" aria-label="Export current group members to final.txt">Export</button>
         </div>
         <div class="bulk-input-wrap">
           <div id="bulk-input" class="bulk-editable" contenteditable="true" data-placeholder="alice@company.com&#10;bob@company.com" role="textbox" aria-multiline="true" aria-labelledby="bulk-label"></div>
@@ -122,6 +124,7 @@ app.innerHTML = `
                 <th>Email</th>
                 <th>Group</th>
                 <th>Status</th>
+                <th>Message</th>
               </tr>
             </thead>
             <tbody id="result-table-body"></tbody>
@@ -220,6 +223,7 @@ app.innerHTML = `
 
 const bulkInput = document.querySelector<HTMLDivElement>("#bulk-input")!;
 const bulkCount = document.querySelector<HTMLSpanElement>("#bulk-count")!;
+const exportMembersBtn = document.querySelector<HTMLButtonElement>("#export-members")!;
 const addZone = document.querySelector<HTMLUListElement>("#add-zone")!;
 const removeZone = document.querySelector<HTMLUListElement>("#remove-zone")!;
 const addCount = document.querySelector<HTMLSpanElement>("#add-count")!;
@@ -349,9 +353,33 @@ function flushBulkCount(): void {
 }
 
 function renderLogHistory(): void {
-  historyBox.textContent = logHistory.length
-    ? logHistory.join("\n")
+  historyBox.innerHTML = logHistory.length
+    ? logHistory.map((line) => colorizeLogLine(line)).join("\n")
     : "No logs history yet.";
+}
+
+/**
+ * Render one persisted log line as safe HTML with a per-line semantic color:
+ * green for successes, red for failures, orange for failure reasons, yellow
+ * for warnings, bold for run summaries, blue for queue actions. The line is
+ * HTML-escaped before classification so file content can never inject markup.
+ */
+function colorizeLogLine(line: string, error = false): string {
+  const escaped = escapeHtml(line);
+  const match = escaped.match(/^(\[\d{2}:\d{2}:\d{2}\])\s?(.*)$/);
+  const stamp = match ? match[1] : "";
+  const rest = match ? match[2] : escaped;
+
+  let cls = "";
+  if (error || rest.startsWith("✗")) cls = "log-fail";
+  else if (rest.startsWith("✓")) cls = "log-ok";
+  else if (rest.startsWith("↳")) cls = "log-reason";
+  else if (/^(Warning|⚠)/.test(rest)) cls = "log-warn";
+  else if (/^Done (ADD|REMOVE)\b/.test(rest)) cls = "log-summary";
+  else if (/^(Queued|Auto removed|Cleared|Undo applied|Running)\b/.test(rest)) cls = "log-info";
+
+  const stampHtml = stamp ? `<span class="log-stamp">${stamp}</span> ` : "";
+  return `${stampHtml}<span class="${cls}">${rest}</span>`;
 }
 
 let modalOpener: HTMLElement | null = null;
@@ -406,9 +434,9 @@ function clearLogHistory(): void {
 }
 
 function log(message: string, error = false): void {
-  const stamp = new Date().toLocaleTimeString();
+  const stamp = new Date().toTimeString().slice(0, 8);
   const line = `[${stamp}] ${message}`;
-  logBox.textContent = `${line}\n${logBox.textContent ?? ""}`.trim();
+  logBox.innerHTML = `${colorizeLogLine(line, error)}\n${logBox.innerHTML}`.trim();
   logHistory.unshift(line);
   if (logHistory.length > LOG_HISTORY_MAX_LINES) {
     logHistory.length = LOG_HISTORY_MAX_LINES;
@@ -431,6 +459,7 @@ function updateCounts(): void {
 function updateRunButtonStates(busy = isBusy): void {
   runAddBtn.disabled = busy || state.add.length === 0;
   runRemoveBtn.disabled = busy || state.remove.length === 0;
+  exportMembersBtn.disabled = busy;
 }
 
 function renderZone(target: QueueName): void {
@@ -479,6 +508,7 @@ function renderResultDetails(details: ActionDetail[]): void {
           <td>${escapeHtml(item.email)}</td>
           <td>${escapeHtml(item.group)}</td>
           <td class="cell-status">${statusLabel}</td>
+          <td class="cell-message">${note ? escapeHtml(note) : "—"}</td>
         </tr>
       `;
     })
@@ -669,13 +699,74 @@ async function runAction(action: QueueName): Promise<void> {
     });
 
     log(`Done ${result.action.toUpperCase()} for ${groups.length} group(s): ${result.successCount} success, ${result.failedCount} failed.`);
-    if (result.stdout) log(result.stdout);
+    const cleanStdout = formatRunStdout(result.stdout ?? "");
+    if (cleanStdout) log(cleanStdout);
     if (result.stderr) log(result.stderr, true);
     renderResultDetails(result.details ?? []);
     await autoRemoveCompletedEmails(action, payload, groups, result.details ?? [], result.failedCount);
     rememberAuthSession();
 
     showProgressDone(result.successCount, result.failedCount);
+  } catch (error) {
+    log(String(error), true);
+    hideProgress();
+  } finally {
+    setBusy(false);
+    resetLayout(true);
+  }
+}
+
+/**
+ * Export the current member list of every configured group to final.txt.
+ * Runs the script in Export-only mode: no membership is modified. This is the
+ * only path that writes the member export — Run actions no longer export.
+ */
+async function exportMembers(): Promise<void> {
+  if (!canStartRun(guardState())) {
+    log(blockReason(guardState()) ?? "Cannot export right now.", true);
+    return;
+  }
+
+  const groups = saveGroupEmails(groupEmailInput.value);
+  if (!groups.length) {
+    log("Please enter at least one valid group email before exporting.", true);
+    return;
+  }
+  groupEmailInput.value = groups.join(", ");
+
+  const adminUpnValue = adminUpnInput.value.trim();
+  const adminUpn = adminUpnValue ? normalizeEmail(adminUpnValue) : null;
+  if (adminUpnValue && !adminUpn) {
+    log("Admin account email is invalid.", true);
+    return;
+  }
+  if (adminUpn) {
+    adminUpnInput.value = adminUpn;
+    saveAdminUpn(adminUpn);
+  }
+
+  const forceReconnect = !hasActiveAuthSession();
+  setBusy(true);
+  showProgressIndeterminate(`Exporting members for ${groups.length} group(s)...`);
+
+  try {
+    if (hasActiveAuthSession()) {
+      log("Reusing Microsoft admin auth session for this app session.");
+    } else {
+      log("Opening Microsoft sign-in window. Complete 2FA when prompted.");
+    }
+
+    const result = await invoke<GroupExportResult>("export_group_members", {
+      groupEmails: groups,
+      adminUpn: adminUpn ?? null,
+      forceReconnect
+    });
+
+    const cleanStdout = formatRunStdout(result.stdout ?? "");
+    if (cleanStdout) log(cleanStdout);
+    if (result.stderr) log(result.stderr, true);
+    rememberAuthSession();
+    showProgressDone(1, 0);
   } catch (error) {
     log(String(error), true);
     hideProgress();
@@ -975,6 +1066,7 @@ undoSwapBtn.addEventListener("click", () => void undoSwapQueues());
 viewLogHistoryBtn.addEventListener("click", () => openLogHistory());
 runAddBtn.addEventListener("click", () => void runAction("add"));
 runRemoveBtn.addEventListener("click", () => void runAction("remove"));
+exportMembersBtn.addEventListener("click", () => void exportMembers());
 closeLogHistoryBtn.addEventListener("click", () => closeLogHistory());
 clearLogHistoryBtn.addEventListener("click", () => clearLogHistory());
 clearBulkInputBtn.addEventListener("click", () => clearBulkInput());

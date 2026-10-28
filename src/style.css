@@ -537,6 +537,17 @@ body {
 
 .result-table .cell-status {
   font-weight: 700;
+  white-space: nowrap;
+}
+
+.result-table .cell-message {
+  color: #ff9baa;
+  font-size: 0.78rem;
+  word-break: break-word;
+}
+
+.result-table tr.status-ok .cell-message {
+  color: #8fa7c9;
 }
 
 .result-table tr.status-ok .cell-status {
@@ -622,6 +633,27 @@ body {
   background: rgba(20, 30, 47, 0.45);
 }
 
+.export-btn {
+  margin-left: 10px;
+  padding: 3px 14px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #6effd6;
+  border: 2px solid #2f9e6c;
+  border-radius: 999px;
+  background: rgba(20, 46, 36, 0.5);
+  box-shadow: 0 0 10px rgba(52, 211, 153, 0.35);
+}
+
+.export-btn:hover:not(:disabled) {
+  background: rgba(52, 211, 153, 0.15);
+}
+
+.export-btn:disabled {
+  opacity: 0.45;
+  box-shadow: none;
+}
+
 #clear-queues {
   color: #ff9baa;
   border-color: #8a3f4d;
@@ -689,13 +721,45 @@ body {
   background: rgba(7, 12, 21, 0.9);
   padding: 10px;
   font-family: "Consolas", "Cascadia Mono", monospace;
-  font-size: 0.82rem;
-  line-height: 1.45;
-  color: #c9d7f2;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #e9eef8;
 }
 
 #log-box.error {
   border-color: #8a3f4d;
+}
+
+.log-stamp {
+  color: #6b7d9e;
+}
+
+.log-ok {
+  color: #4ade80;
+}
+
+.log-fail {
+  color: #ff4d5e;
+  font-weight: 600;
+}
+
+.log-reason {
+  color: #ff8f9a;
+}
+
+.log-warn {
+  color: #ffd60a;
+}
+
+.log-summary {
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.log-info {
+  color: #e9eef8;
 }
 
 .history-modal {
@@ -750,9 +814,11 @@ body {
   min-height: 320px;
   max-height: 68vh;
   font-family: "Consolas", "Cascadia Mono", monospace;
-  font-size: 0.82rem;
-  line-height: 1.45;
-  color: #c9d7f2;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #e9eef8;
   background: rgba(7, 12, 21, 0.9);
 }
 

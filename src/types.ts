@@ -15,6 +15,11 @@ export interface GroupRunResult {
   stderr: string;
 }
 
+export interface GroupExportResult {
+  stdout: string;
+  stderr: string;
+}
+
 export type ActionStatus = "ok" | "fail";
 
 export interface ActionDetail {
