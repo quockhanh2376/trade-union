@@ -85,7 +85,7 @@ test("multi-group run: email ok in ALL groups is removable", () => {
 
 // ── Fallback path: no details ───────────────────────────────────────
 
-test("no details + failedCount 0: whole payload is removable (legacy fallback)", () => {
+test("no details + failedCount 0: nothing is removable (fail-safe against data loss)", () => {
   const result = resolveRemovableEmails({
     action: "add",
     payload: ["a@x.com", "b@x.com"],
@@ -93,7 +93,8 @@ test("no details + failedCount 0: whole payload is removable (legacy fallback)",
     details: [],
     failedCount: 0,
   });
-  assert.deepEqual([...result.removable].sort(), ["a@x.com", "b@x.com"]);
+  assert.equal(result.count, 0);
+  assert.deepEqual([...result.removable], []);
 });
 
 test("no details + failedCount > 0: nothing is removable (safe default)", () => {

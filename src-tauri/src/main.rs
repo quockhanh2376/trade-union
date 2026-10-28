@@ -705,7 +705,13 @@ async fn run_group_action(
 
         let default_processed = cleaned.len() * groups.len();
         let (success_count, failed_count, processed, details) = parse_result_json(&stdout)
-            .unwrap_or((default_processed, 0, default_processed, Vec::new()));
+            .ok_or_else(|| {
+                build_command_error(
+                    &format!("{act} action completed without reporting RESULT_JSON payload."),
+                    &stdout,
+                    &stderr,
+                )
+            })?;
 
         Ok(GroupRunResult {
             action: act.to_ascii_lowercase(),
@@ -1285,5 +1291,17 @@ mod tests {
         assert_eq!(normalize_email("alice bob@x.com"), None);
         assert_eq!(normalize_email("alice@x."), None);
         assert_eq!(normalize_email("alice@.com"), None);
+    }
+
+    #[test]
+    fn parse_result_json_returns_none_when_marker_is_missing() {
+        let stdout = "Running Add for ASWVN_TradeUnion...\nAdd success: a@x.com\nCompleted Add.";
+        assert!(parse_result_json(stdout).is_none());
+    }
+
+    #[test]
+    fn parse_result_json_returns_none_on_malformed_json() {
+        let stdout = "RESULT_JSON:{not valid json}";
+        assert!(parse_result_json(stdout).is_none());
     }
 }
