@@ -1083,9 +1083,6 @@ tabPasswordBtn.addEventListener("click", () => switchTab("password"));
 togglePwdBtn.addEventListener("click", () => togglePasswordVisibility());
 btnChangePassword.addEventListener("click", () => void handlePasswordChange());
 document.querySelector("#password-form")!.addEventListener("submit", (e) => e.preventDefault());
-window.addEventListener("beforeunload", () => {
-  flushSaveLogHistory();
-});
 saveTargetUpnBtn.addEventListener("click", () => {
   const current = targetUpnInput.value.trim();
   const saved = saveTargetPasswordEmail(current);
@@ -1158,6 +1155,7 @@ setInterval(() => {
 
 window.addEventListener("beforeunload", () => {
   clearAuthSession();
+  flushSaveLogHistory();
 });
 
 wireDropZone(addZone, "add");
