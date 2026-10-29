@@ -140,7 +140,7 @@ app.innerHTML = `
           <p class="section-desc">Change password for a Microsoft 365 / Entra ID user account via Microsoft Graph API (MFA supported).</p>
         </div>
 
-        <form id="password-form" class="password-form" onsubmit="return false;">
+        <form id="password-form" class="password-form">
           <div class="form-group">
             <label for="target-upn">Target Email:</label>
             <div class="input-with-action">
@@ -283,7 +283,10 @@ let loadFailed = false;
  * We defer the parse until the user pauses for this many milliseconds.
  */
 const BULK_COUNT_DEBOUNCE_MS = 150;
+const SAVE_LOG_DEBOUNCE_MS = 500;
+const LOG_BOX_MAX_LINES = 1000;
 let bulkCountTimer: ReturnType<typeof setTimeout> | null = null;
+let saveLogTimer: ReturnType<typeof setTimeout> | null = null;
 /** Snapshot of the guard flags, consumed by the pure guard helpers (F-07/F-08). */
 function guardState() {
   return { busy: isBusy, loadFailed };
@@ -352,6 +355,24 @@ function flushBulkCount(): void {
   updateBulkCount();
 }
 
+function scheduleSaveLogHistory(): void {
+  if (saveLogTimer !== null) {
+    clearTimeout(saveLogTimer);
+  }
+  saveLogTimer = setTimeout(() => {
+    saveLogTimer = null;
+    saveLogHistory(logHistory);
+  }, SAVE_LOG_DEBOUNCE_MS);
+}
+
+function flushSaveLogHistory(): void {
+  if (saveLogTimer !== null) {
+    clearTimeout(saveLogTimer);
+    saveLogTimer = null;
+  }
+  saveLogHistory(logHistory);
+}
+
 function renderLogHistory(): void {
   historyBox.innerHTML = logHistory.length
     ? logHistory.map((line) => colorizeLogLine(line)).join("\n")
@@ -365,18 +386,22 @@ function renderLogHistory(): void {
  * HTML-escaped before classification so file content can never inject markup.
  */
 function colorizeLogLine(line: string, error = false): string {
+  if (line.includes("\n")) {
+    return line.split("\n").map((subLine) => colorizeLogLine(subLine, error)).join("\n");
+  }
   const escaped = escapeHtml(line);
   const match = escaped.match(/^(\[\d{2}:\d{2}:\d{2}\])\s?(.*)$/);
   const stamp = match ? match[1] : "";
   const rest = match ? match[2] : escaped;
+  const trimmed = rest.trimStart();
 
   let cls = "";
-  if (error || rest.startsWith("✗")) cls = "log-fail";
-  else if (rest.startsWith("✓")) cls = "log-ok";
-  else if (rest.startsWith("↳")) cls = "log-reason";
-  else if (/^(Warning|⚠)/.test(rest)) cls = "log-warn";
-  else if (/^Done (ADD|REMOVE)\b/.test(rest)) cls = "log-summary";
-  else if (/^(Queued|Auto removed|Cleared|Undo applied|Running)\b/.test(rest)) cls = "log-info";
+  if (error || trimmed.startsWith("✗")) cls = "log-fail";
+  else if (trimmed.startsWith("✓")) cls = "log-ok";
+  else if (trimmed.startsWith("↳")) cls = "log-reason";
+  else if (/^(Warning|⚠)/.test(trimmed)) cls = "log-warn";
+  else if (/^Done (ADD|REMOVE)\b/.test(trimmed)) cls = "log-summary";
+  else if (/^(Queued|Auto removed|Cleared|Undo applied|Running)\b/.test(trimmed)) cls = "log-info";
 
   const stampHtml = stamp ? `<span class="log-stamp">${stamp}</span> ` : "";
   return `${stampHtml}<span class="${cls}">${rest}</span>`;
@@ -428,6 +453,10 @@ function trapModalFocus(event: KeyboardEvent): void {
 }
 
 function clearLogHistory(): void {
+  if (saveLogTimer !== null) {
+    clearTimeout(saveLogTimer);
+    saveLogTimer = null;
+  }
   logHistory.length = 0;
   saveLogHistory(logHistory);
   renderLogHistory();
@@ -436,12 +465,19 @@ function clearLogHistory(): void {
 function log(message: string, error = false): void {
   const stamp = new Date().toTimeString().slice(0, 8);
   const line = `[${stamp}] ${message}`;
-  logBox.innerHTML = `${colorizeLogLine(line, error)}\n${logBox.innerHTML}`.trim();
+  const newHtml = colorizeLogLine(line, error);
+  const combined = logBox.innerHTML ? `${newHtml}\n${logBox.innerHTML}`.trim() : newHtml;
+  const lines = combined.split("\n");
+  if (lines.length > LOG_BOX_MAX_LINES) {
+    lines.length = LOG_BOX_MAX_LINES;
+  }
+  logBox.innerHTML = lines.join("\n");
+
   logHistory.unshift(line);
   if (logHistory.length > LOG_HISTORY_MAX_LINES) {
     logHistory.length = LOG_HISTORY_MAX_LINES;
   }
-  saveLogHistory(logHistory);
+  scheduleSaveLogHistory();
   if (error) {
     logBox.classList.add("error");
     // Announce blocking errors via the assertive alert region.
@@ -963,14 +999,19 @@ async function handlePasswordChange(): Promise<void> {
   }
 
   const newPwd = newPasswordInput.value;
-  if (newPwd.length < 8) {
-    log("New password must be at least 8 characters long.", true);
+  if ([...newPwd].length < 8) {
+    log("Password must be at least 8 characters long.", true);
     newPasswordInput.focus();
     return;
   }
 
   const rawAdmin = adminUpnInput.value.trim();
   const adminUpn = rawAdmin ? normalizeEmail(rawAdmin) : null;
+  if (rawAdmin && !adminUpn) {
+    log("Admin account email is invalid.", true);
+    adminUpnInput.focus();
+    return;
+  }
 
   const forceChange = forceChangePwdCheckbox.checked;
 
@@ -1041,6 +1082,10 @@ tabGroupsBtn.addEventListener("click", () => switchTab("groups"));
 tabPasswordBtn.addEventListener("click", () => switchTab("password"));
 togglePwdBtn.addEventListener("click", () => togglePasswordVisibility());
 btnChangePassword.addEventListener("click", () => void handlePasswordChange());
+document.querySelector("#password-form")!.addEventListener("submit", (e) => e.preventDefault());
+window.addEventListener("beforeunload", () => {
+  flushSaveLogHistory();
+});
 saveTargetUpnBtn.addEventListener("click", () => {
   const current = targetUpnInput.value.trim();
   const saved = saveTargetPasswordEmail(current);

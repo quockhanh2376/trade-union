@@ -57,7 +57,7 @@ struct ActionDetail {
     message: String,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PasswordChangeResult {
     success: bool,
@@ -75,6 +75,7 @@ struct GroupExportResult {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PasswordResultJson {
     success: bool,
     #[serde(default)]
@@ -778,10 +779,48 @@ fn validate_new_password(pwd: &str) -> Result<(), String> {
     if pwd.contains('\r') || pwd.contains('\n') {
         return Err("Password must not contain line breaks.".to_string());
     }
-    if pwd.trim().len() < 8 {
+    if pwd.chars().count() < 8 {
         return Err("Password must be at least 8 characters long.".to_string());
     }
     Ok(())
+}
+
+fn resolve_password_change_output(
+    status_success: bool,
+    fallback_target_email: &str,
+    stdout: &str,
+    stderr: &str,
+) -> Result<PasswordChangeResult, String> {
+    let parsed_result = parse_password_result_json(stdout);
+    if parsed_result.is_none() && !status_success {
+        return Err(build_command_error(
+            "Password change failed.",
+            stdout,
+            stderr,
+        ));
+    }
+
+    let (success, parsed_email, parsed_msg) = parsed_result.unwrap_or((
+        status_success,
+        fallback_target_email.to_string(),
+        if status_success {
+            "Password changed successfully.".to_string()
+        } else {
+            "Failed to change password.".to_string()
+        },
+    ));
+
+    Ok(PasswordChangeResult {
+        success,
+        target_email: if parsed_email.is_empty() {
+            fallback_target_email.to_string()
+        } else {
+            parsed_email
+        },
+        message: parsed_msg,
+        stdout: stdout.to_string(),
+        stderr: stderr.to_string(),
+    })
 }
 
 #[tauri::command]
@@ -855,35 +894,12 @@ async fn change_user_password(
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
 
-        let (success, parsed_email, parsed_msg) = parse_password_result_json(&stdout).unwrap_or((
+        resolve_password_change_output(
             output.status.success(),
-            cleaned_target_email.clone(),
-            if output.status.success() {
-                "Password changed successfully.".to_string()
-            } else {
-                "Failed to change password.".to_string()
-            },
-        ));
-
-        if !output.status.success() && !success && parsed_msg == "Failed to change password." {
-            return Err(build_command_error(
-                &format!("Password change failed: {parsed_msg}"),
-                &stdout,
-                &stderr,
-            ));
-        }
-
-        Ok(PasswordChangeResult {
-            success,
-            target_email: if parsed_email.is_empty() {
-                cleaned_target_email
-            } else {
-                parsed_email
-            },
-            message: parsed_msg,
-            stdout,
-            stderr,
-        })
+            &cleaned_target_email,
+            &stdout,
+            &stderr,
+        )
     })
     .await
     .map_err(|err| format!("Background task failed: {err}"))?
@@ -1069,6 +1085,27 @@ mod tests {
         );
         assert!(validate_new_password("valid-password-123").is_ok());
         assert!(validate_new_password("Mật-khẩu-é€1").is_ok());
+        assert!(validate_new_password("é€é€é€é€").is_ok());
+        assert!(validate_new_password("       x").is_ok());
+    }
+
+    #[test]
+    fn resolve_password_change_output_fails_on_nonzero_without_json() {
+        let res = resolve_password_change_output(false, "user@test.com", "Some error output", "Some stderr");
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(err.contains("Password change failed."));
+        assert!(err.contains("Some error output"));
+        assert!(err.contains("Some stderr"));
+    }
+
+    #[test]
+    fn resolve_password_change_output_parses_json_even_on_failure() {
+        let stdout = r#"RESULT_JSON:{"success":false,"message":"Policy violation","targetEmail":"user@test.com"}"#;
+        let res = resolve_password_change_output(true, "fallback@test.com", stdout, "").expect("ok");
+        assert!(!res.success);
+        assert_eq!(res.message, "Policy violation");
+        assert_eq!(res.target_email, "user@test.com");
     }
 
     #[test]
