@@ -10,7 +10,6 @@ const mainSource = await readFile(new URL("../src-tauri/src/main.rs", import.met
 const exchangeScriptNames = [
   "common.ps1",
   "manage_distribution_group.ps1",
-  "detect_group_type.ps1"
 ];
 
 const exchangeScripts = await Promise.all(
@@ -71,7 +70,7 @@ test("exchange scripts prefer bundled module path and fallback to online install
   assert.match(common.source, /Install-Module -Name ExchangeOnlineManagement -Scope CurrentUser -Force -AllowClobber/, "common.ps1 should keep online fallback install");
 
   // Production scripts must dot-source common.ps1 (no longer duplicate helpers).
-  for (const fileName of ["manage_distribution_group.ps1", "detect_group_type.ps1"]) {
+  for (const fileName of ["manage_distribution_group.ps1"]) {
     const source = exchangeScripts.find((s) => s.fileName === fileName)?.source;
     assert.ok(source, `${fileName} must exist`);
     assert.match(source, /\. "\$PSScriptRoot\/common\.ps1"/, `${fileName} must dot-source common.ps1`);
@@ -84,5 +83,18 @@ test("common.ps1 is bundled as a Tauri resource (F-10)", () => {
   assert.ok(
     tauriConfig.bundle.resources.includes("scripts/common.ps1"),
     "common.ps1 must be in bundle.resources so packaged apps include it"
+  );
+});
+
+test("R2-11: Get-DistributionGroupMember queries use -ResultSize Unlimited", () => {
+  const mgmt = exchangeScripts.find((s) => s.fileName === "manage_distribution_group.ps1")?.source;
+  assert.ok(mgmt, "manage_distribution_group.ps1 must exist");
+  assert.match(
+    mgmt,
+    /Get-DistributionGroupMember\s+-Identity\s+\$group\s+-ResultSize\s+Unlimited/
+  );
+  assert.doesNotMatch(
+    mgmt,
+    /Get-DistributionGroupMember\s+-Identity\s+\$group\s+-ErrorAction/
   );
 });

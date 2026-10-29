@@ -32,7 +32,6 @@
     "resources": [
       "scripts/common.ps1",
       "scripts/manage_distribution_group.ps1",
-      "scripts/detect_group_type.ps1",
       "scripts/change_password.ps1",
       "vendor/powershell-modules"
     ],

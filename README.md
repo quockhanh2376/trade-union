@@ -100,8 +100,7 @@ Backend (Rust / Tauri v2)
   │                  run_group_action (with 15-min timeout, F-06)
   └── scripts/
        ├── common.ps1                    shared helpers (F-10)
-       ├── manage_distribution_group.ps1  Add/Remove members + export
-       └── detect_group_type.ps1          standalone group-type probe
+       └── manage_distribution_group.ps1  Add/Remove members + export
 ```
 
 The frontend never touches files or Exchange directly; all operations go
@@ -122,7 +121,7 @@ node --experimental-strip-types --test tests/email.test.mjs tests/queue.test.mjs
 cargo test --manifest-path src-tauri/Cargo.toml
 
 # PowerShell syntax check
-powershell -NoProfile -Command "foreach ($f in @('common','manage_distribution_group','detect_group_type')) { $null = [System.Management.Automation.Language.Parser]::ParseFile(\"$PWD/src-tauri/scripts/$f.ps1\", [ref]$null, [ref]$null) }"
+powershell -NoProfile -Command "foreach ($f in @('common','manage_distribution_group')) { $null = [System.Management.Automation.Language.Parser]::ParseFile(\"$PWD/src-tauri/scripts/$f.ps1\", [ref]$null, [ref]$null) }"
 ```
 
 There is no `npm test` script — invoke the test runners directly as above.

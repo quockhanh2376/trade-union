@@ -53,7 +53,6 @@ Trade-Union/
 │   │   └── main.rs                   # ~700 dòng – 3 commands + timeout runner (F-06)
 │   ├── scripts/
 │   │   ├── common.ps1                # Shared helpers: module loading + connect params (F-10)
-│   │   ├── detect_group_type.ps1     # Standalone group-type probe
 │   │   └── manage_distribution_group.ps1  # Add/Remove members + export (dot-sources common.ps1)
 │   ├── vendor/powershell-modules/    # Bundled ExchangeOnlineManagement 3.9.2
 │   └── installer-hooks/              # NSIS clean-install hook
@@ -104,7 +103,6 @@ graph TB
 
     subgraph Scripts["PowerShell Scripts"]
         COMMON["common.ps1<br/>shared helpers (F-10)"]
-        PS1["detect_group_type.ps1"]
         PS2["manage_distribution_group.ps1"]
     end
 
@@ -137,8 +135,7 @@ graph TB
 | `save_email_queues` | Lưu 2 queue ra file, xử lý trùng lặp | ✅ Hoàn thành |
 | `run_group_action` | Gọi `manage_distribution_group.ps1` Add/Remove + timeout 15 phút | ✅ Hoàn thành + F-06 timeout |
 
-> **Ghi chú:** Không có command `check_group_type` — `detect_group_type.ps1` là
-> standalone tool, không được Rust invoke trực tiếp (chỉ bundled).
+> **Ghi chú:** Không có command `check_group_type` (`detect_group_type.ps1` đã xóa ở R2-12 do không sử dụng).
 
 ---
 

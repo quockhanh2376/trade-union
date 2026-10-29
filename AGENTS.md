@@ -7,7 +7,7 @@ Guidance for ZCode agents working in this repository.
 **Trade Union Group Manager** — a Tauri v2 desktop app (Windows-focused) that manages
 members of Exchange Online **Distribution Groups** via two drag-and-drop queues
 (Add / Remove) and provides self-service password management via Microsoft Graph.
-Product identifier: `com.aswhite.tradeunion`. Current version: **2.0.6**.
+Product identifier: `com.aswhite.tradeunion`. Current version: **2.0.8**.
 
 ## Architecture (three layers — keep them separate)
 
@@ -17,15 +17,15 @@ Product identifier: `com.aswhite.tradeunion`. Current version: **2.0.6**.
    (normalize/validate), `storage.ts` (localStorage/sessionStorage),
    `auth.ts` (in-memory auth-session cache), `constants.ts`, `types.ts`, `style.css`.
    Talks to the backend only via `invoke()` from `@tauri-apps/api/core`.
-2. **Backend** — Rust, single crate in `src-tauri/src/main.rs`. Exposes four
+2. **Backend** — Rust, single crate in `src-tauri/src/main.rs`. Exposes five
    `#[tauri::command]`s: `load_seed_emails`, `save_email_queues`, `run_group_action`,
-   `change_user_password`.
-   `run_group_action` shells out to PowerShell via `hidden_powershell_command()`.
+   `export_group_members`, `change_user_password`.
+   `run_group_action` and `export_group_members` shell out to PowerShell via `hidden_powershell_command()`.
 3. **PowerShell** — `src-tauri/scripts/*.ps1` drive Exchange Online
    (`manage_distribution_group.ps1` via `ExchangeOnlineManagement`) and Microsoft Graph
    (`change_password.ps1` via `Microsoft.Graph.Users`). Exchange modules are bundled offline
    under `src-tauri/vendor/powershell-modules/` so no internet install is required.
-   Microsoft.Graph.Users KHÔNG bundle, được cài lúc chạy với version pin trong change_password.ps1 (`$GraphModuleVersion`); nâng version = sửa biến này.
+   Microsoft.Graph.Users is NOT bundled; change_password.ps1 installs it at runtime pinned to `$GraphModuleVersion` — bump the pin by editing that variable.
 
 **Layer rule:** frontend never touches files or Exchange directly; Rust never
 reaches into the DOM; PowerShell never imports app code. Frontend ↔ Rust contract
@@ -143,4 +143,4 @@ edits.
 - `project_analysis.md` — architecture overview (Vietnamese) + folder map.
 - `RELEASE_CHECKLIST_v1.1.0.md` — release/version-sync procedure.
 - `docs/superpowers/plans/` — historical design notes (e.g. hiding the PowerShell window).
-- `RELEASE_NOTES_*.md` — per-version changes; latest is `v2.0.6`.
+- `RELEASE_NOTES_*.md` — per-version changes; latest is `v2.0.8`.
