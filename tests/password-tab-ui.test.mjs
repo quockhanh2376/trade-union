@@ -41,3 +41,26 @@ test("backend implements change_user_password command and registers it", () => {
   assert.match(tauriSource, /change_user_password/);
   assert.match(tauriSource, /struct PasswordChangeResult/);
 });
+
+test("R2-03: password form does not have inline onsubmit and attaches submit listener", () => {
+  assert.doesNotMatch(mainSource, /onsubmit="return false;"/);
+  assert.match(mainSource, /document\.querySelector\("#password-form"\)!\.addEventListener\("submit"/);
+});
+
+test("R2-08: password validation counts unicode characters and does not trim", () => {
+  assert.match(mainSource, /\[\.\.\.newPwd\]\.length < 8/);
+  assert.match(tauriSource, /pwd\.chars\(\)\.count\(\) < 8/);
+  assert.doesNotMatch(tauriSource, /pwd\.trim\(\)\.len\(\) < 8/);
+});
+
+test("R2-09: invalid admin email in password tab logs error and returns", () => {
+  assert.match(mainSource, /if \(rawAdmin && !adminUpn\) \{\s*log\("Admin account email is invalid\.", true\);/);
+});
+
+test("R2-10: saveLogHistory is debounced and logBox is capped at 1000 lines", () => {
+  assert.match(mainSource, /const SAVE_LOG_DEBOUNCE_MS = 500;/);
+  assert.match(mainSource, /const LOG_BOX_MAX_LINES = 1000;/);
+  assert.match(mainSource, /function scheduleSaveLogHistory/);
+  assert.match(mainSource, /function flushSaveLogHistory/);
+  assert.match(mainSource, /window\.addEventListener\("beforeunload"/);
+});
