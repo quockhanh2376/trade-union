@@ -7,7 +7,7 @@ Guidance for ZCode agents working in this repository.
 **Trade Union Group Manager** — a Tauri v2 desktop app (Windows-focused) that manages
 members of Exchange Online **Distribution Groups** via two drag-and-drop queues
 (Add / Remove) and provides self-service password management via Microsoft Graph.
-Product identifier: `com.aswhite.tradeunion`. Current version: **2.0.8**.
+Product identifier: `com.aswhite.tradeunion`. Current version: **2.0.9**.
 
 ## Architecture (three layers — keep them separate)
 
@@ -143,4 +143,4 @@ edits.
 - `project_analysis.md` — architecture overview (Vietnamese) + folder map.
 - `RELEASE_CHECKLIST_v1.1.0.md` — release/version-sync procedure.
 - `docs/superpowers/plans/` — historical design notes (e.g. hiding the PowerShell window).
-- `RELEASE_NOTES_*.md` — per-version changes; latest is `v2.0.8`.
+- `RELEASE_NOTES_*.md` — per-version changes; latest is `v2.0.9`.
