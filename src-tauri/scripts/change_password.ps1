@@ -45,13 +45,14 @@ if ([string]::IsNullOrEmpty($NewPassword) -or $NewPassword.Length -lt 8) {
 }
 
 # ---- Module Loading ----
-Write-Host "Checking Microsoft.Graph.Users module..." -ForegroundColor Yellow
-if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Users)) {
-    Write-Host "Installing Microsoft.Graph.Users module (Scope CurrentUser)..." -ForegroundColor Yellow
-    Install-Module -Name Microsoft.Graph.Users -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+$GraphModuleVersion = "2.41.2"
+Write-Host "Checking Microsoft.Graph.Users $GraphModuleVersion module..." -ForegroundColor Yellow
+if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Users | Where-Object Version -eq $GraphModuleVersion)) {
+    Write-Host "Installing Microsoft.Graph.Users $GraphModuleVersion (first run, may take a few minutes)..." -ForegroundColor Yellow
+    Install-Module -Name Microsoft.Graph.Users -RequiredVersion $GraphModuleVersion -Repository PSGallery -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
 }
 
-Import-Module Microsoft.Graph.Users -ErrorAction Stop
+Import-Module Microsoft.Graph.Users -RequiredVersion $GraphModuleVersion -ErrorAction Stop
 
 # ---- Interactive MFA Sign-In ----
 if (-not [string]::IsNullOrWhiteSpace($AdminUPN)) {

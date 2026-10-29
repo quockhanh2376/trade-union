@@ -25,6 +25,7 @@ Product identifier: `com.aswhite.tradeunion`. Current version: **2.0.6**.
    (`manage_distribution_group.ps1` via `ExchangeOnlineManagement`) and Microsoft Graph
    (`change_password.ps1` via `Microsoft.Graph.Users`). Exchange modules are bundled offline
    under `src-tauri/vendor/powershell-modules/` so no internet install is required.
+   Microsoft.Graph.Users KHÔNG bundle, được cài lúc chạy với version pin trong change_password.ps1 (`$GraphModuleVersion`); nâng version = sửa biến này.
 
 **Layer rule:** frontend never touches files or Exchange directly; Rust never
 reaches into the DOM; PowerShell never imports app code. Frontend ↔ Rust contract

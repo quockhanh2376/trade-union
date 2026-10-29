@@ -1027,6 +1027,26 @@ mod tests {
             enc_idx < readline_idx,
             "InputEncoding configuration must appear before [Console]::In.ReadLine()"
         );
+        assert!(
+            script.contains("$GraphModuleVersion = \""),
+            "change_password.ps1 must declare pinned $GraphModuleVersion"
+        );
+        let install_line = script
+            .lines()
+            .find(|l| l.contains("Install-Module") && l.contains("Microsoft.Graph.Users"))
+            .expect("change_password.ps1 must have Install-Module for Microsoft.Graph.Users");
+        assert!(
+            install_line.contains("-RequiredVersion $GraphModuleVersion"),
+            "Install-Module must specify -RequiredVersion $GraphModuleVersion"
+        );
+        let import_line = script
+            .lines()
+            .find(|l| l.contains("Import-Module") && l.contains("Microsoft.Graph.Users"))
+            .expect("change_password.ps1 must have Import-Module for Microsoft.Graph.Users");
+        assert!(
+            import_line.contains("-RequiredVersion $GraphModuleVersion"),
+            "Import-Module must specify -RequiredVersion $GraphModuleVersion"
+        );
     }
 
     #[test]

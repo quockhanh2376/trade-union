@@ -984,7 +984,7 @@ async function handlePasswordChange(): Promise<void> {
     pwdMsgBox.textContent = "";
 
     log(`[START] Changing password for ${targetEmail} via Microsoft Graph...`);
-    showProgressIndeterminate("Connecting to Microsoft Graph & changing password…");
+    showProgressIndeterminate("Connecting to Microsoft Graph & changing password… (first run may take a few minutes to install modules)");
 
     const result = await invoke<PasswordChangeResult>("change_user_password", {
       targetEmail,
