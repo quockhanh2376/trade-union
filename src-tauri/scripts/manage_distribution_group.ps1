@@ -244,7 +244,7 @@ try {
                     $list = @($members | Select-Object -ExpandProperty User)
                 }
                 else {
-                    $members = Get-DistributionGroupMember -Identity $group -ErrorAction Stop
+                    $members = Get-DistributionGroupMember -Identity $group -ResultSize Unlimited -ErrorAction Stop
                     $list = @($members | Select-Object -ExpandProperty PrimarySmtpAddress)
                 }
                 if ($groupIndex -eq 1) {
@@ -306,7 +306,7 @@ try {
         $memberGuids = @{}
         if (-not $isSharedMailbox) {
             try {
-                foreach ($member in (Get-DistributionGroupMember -Identity $group -ErrorAction Stop)) {
+                foreach ($member in (Get-DistributionGroupMember -Identity $group -ResultSize Unlimited -ErrorAction Stop)) {
                     $addr = ([string]$member.PrimarySmtpAddress).ToLowerInvariant()
                     if ($addr -and -not $memberGuids.ContainsKey($addr)) {
                         $memberGuids[$addr] = $member.Guid.ToString()

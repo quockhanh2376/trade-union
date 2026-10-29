@@ -86,3 +86,16 @@ test("common.ps1 is bundled as a Tauri resource (F-10)", () => {
     "common.ps1 must be in bundle.resources so packaged apps include it"
   );
 });
+
+test("R2-11: Get-DistributionGroupMember queries use -ResultSize Unlimited", () => {
+  const mgmt = exchangeScripts.find((s) => s.fileName === "manage_distribution_group.ps1")?.source;
+  assert.ok(mgmt, "manage_distribution_group.ps1 must exist");
+  assert.match(
+    mgmt,
+    /Get-DistributionGroupMember\s+-Identity\s+\$group\s+-ResultSize\s+Unlimited/
+  );
+  assert.doesNotMatch(
+    mgmt,
+    /Get-DistributionGroupMember\s+-Identity\s+\$group\s+-ErrorAction/
+  );
+});
